@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import type { Heightmap } from '../world/heightmap'
 import { writeTerrainColor } from './colorRamp'
+import {
+  createTerrainMaterial,
+  type DetailSettings,
+  type TerrainMaterial,
+} from './terrainMaterial'
 
 export interface TerrainMeshOptions {
   cellSize: number
@@ -9,6 +14,8 @@ export interface TerrainMeshOptions {
   /** Cells per tile edge. */
   tileSize: number
   wireframe: boolean
+  /** From renderer.capabilities.getMaxAnisotropy(). */
+  maxAnisotropy?: number
 }
 
 interface Tile {
@@ -31,18 +38,20 @@ interface Tile {
 export class TerrainMesh {
   readonly group = new THREE.Group()
   private tiles: Tile[] = []
+  private surface: TerrainMaterial
   private material: THREE.MeshStandardMaterial
   private opts: TerrainMeshOptions
   private hm: Heightmap | null = null
 
   constructor(opts: TerrainMeshOptions) {
     this.opts = { ...opts }
-    this.material = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.95,
-      metalness: 0.0,
-      wireframe: opts.wireframe,
-    })
+    this.surface = createTerrainMaterial(opts.maxAnisotropy ?? 1)
+    this.material = this.surface.material
+    this.material.wireframe = opts.wireframe
+  }
+
+  setDetail(d: DetailSettings): void {
+    this.surface.setDetail(d)
   }
 
   get triangleCount(): number {
@@ -226,6 +235,6 @@ export class TerrainMesh {
 
   dispose(): void {
     this.disposeTiles()
-    this.material.dispose()
+    this.surface.dispose()
   }
 }

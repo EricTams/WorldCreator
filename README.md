@@ -134,6 +134,55 @@ raise **height scale** or lower **cell size** under *Look*; `redistribution`
 and ridge `strength` under *Shape* and *Ridged mountains* control how spiky
 rather than how tall.
 
+## Surface detail
+
+Close-up quality comes from the material, not from geometry. The terrain mesh is
+unchanged; a detail layer in the shader does the work, at no triangle cost
+(~9.5 ms worst frame at ground level, and the texture builds once in ~39 ms).
+
+**Triplanar projection.** A heightfield has no sensible UV parameterisation — a
+flat XZ projection stretches into vertical streaks on every cliff face, which is
+exactly where detail is most visible. Triplanar samples from all three world
+axes and blends by the surface normal, so slopes get the same texel density as
+flats. The blend weights are raised to the 4th power; a soft blend reads as a
+muddy smear along every 45° slope.
+
+**The detail texture is generated, not shipped** — no binary in the repo,
+nothing to 404 on Pages. It tiles seamlessly because it samples *4D* simplex
+noise around a torus: walking u and v once around two circles returns exactly to
+the start, so the 2D slice wraps in both axes. Sampling a 2D field over a square
+and hoping leaves a visible join, and blending the edges to hide it softens
+exactly the fine detail the texture exists to provide.
+
+**Two scales.** Fine grain (~9 m) reads as surface material; broad mottling
+(~70 m) breaks up the flat colour bands that make untextured terrain look like
+plastic. One scale alone reads as uniform fizz.
+
+Implemented by patching `MeshStandardMaterial` through `onBeforeCompile` rather
+than writing a `ShaderMaterial`, which keeps PBR lighting, fog and tone mapping
+for free. Note the injected normal perturbation is built in world space but
+`normal` at that point in the fragment shader is in **view** space, so it gets
+rotated by `viewMatrix` before being added.
+
+## A note on LOD
+
+LOD removes detail at distance; it does not add any up close. Switching on a
+perfect LOD system would leave the near view identical, because near tiles are
+already drawn at full resolution. Its real role is to make a *higher source
+resolution* affordable — so it's worth doing after detail texturing and
+geometric amplification, not before.
+
+For reference, the sketch when it's needed: stride-based per-tile LOD (a tile at
+level *k* samples every 2ᵏ-th vertex from the same global array), distance
+selection with hysteresis so tiles don't thrash at boundaries, neighbouring
+tiles constrained to differ by at most one level, and cracks closed by welding
+the finer tile's odd edge vertices onto the midpoint of their neighbours —
+preferable to skirts, which are visibly wrong at exactly the grazing ground-level
+angles this is meant to improve. `TerrainMesh.refresh()` already takes a dirty
+rectangle, so only tiles whose level changed need rebuilding.
+
+At 512² (524k triangles) none of this is necessary yet.
+
 ## Implementation notes
 
 **Tiled meshing.** The terrain is built as a grid of 64-cell tiles rather than

@@ -24,7 +24,9 @@ const terrain = new TerrainMesh({
   seaLevel: params.shape.seaLevel,
   tileSize: 64,
   wireframe: params.render.wireframe,
+  maxAnisotropy: scene.renderer.capabilities.getMaxAnisotropy(),
 })
+terrain.setDetail(params.render.detail)
 scene.scene.add(terrain.group)
 
 const keys = new Keyboard()
@@ -194,6 +196,7 @@ function applySceneParams(): void {
   scene.setEnvironment(params.shape.seaLevel, params.render.heightScale, extent)
   scene.setSun(params.render.sunAzimuth, params.render.sunElevation, extent)
   scene.water.visible = params.render.showWater
+  terrain.setDetail(params.render.detail)
 }
 
 /** A look-only change: re-mesh for colour/scale, but skip the noise pipeline. */
@@ -231,6 +234,7 @@ const gui = buildGui(params, {
   erode: runErosion,
   revert: revertErosion,
   preset: (p: ViewPreset) => rig.apply(p),
+  detailChanged: () => terrain.setDetail(params.render.detail),
   avatarChanged: syncAvatarVisibility,
   recallAvatar: () => {
     settleAvatar(true)

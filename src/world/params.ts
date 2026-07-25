@@ -68,6 +68,16 @@ export interface ErosionParams {
   initialSpeed: number
 }
 
+export interface DetailParams {
+  enabled: boolean
+  /** World units per repeat of the fine grain. */
+  scale: number
+  /** World units per repeat of the broad mottling. */
+  macroScale: number
+  normalStrength: number
+  albedoStrength: number
+}
+
 export interface RenderParams {
   /** World units per grid cell. */
   cellSize: number
@@ -77,6 +87,7 @@ export interface RenderParams {
   sunElevation: number
   wireframe: boolean
   showWater: boolean
+  detail: DetailParams
 }
 
 export interface AvatarParams {
@@ -184,6 +195,17 @@ export function defaultParams(): WorldParams {
       sunElevation: 32,
       wireframe: false,
       showWater: true,
+      detail: {
+        enabled: true,
+        // Tuned against an avatar roughly 5 world units tall: the fine grain
+        // wants to be a bit smaller than the figure, the macro mottling much
+        // larger, so the two read as material and as terrain variation rather
+        // than as one uniform fizz.
+        scale: 9,
+        macroScale: 70,
+        normalStrength: 0.55,
+        albedoStrength: 0.3,
+      },
     },
     avatar: {
       enabled: true,

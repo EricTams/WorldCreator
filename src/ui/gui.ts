@@ -11,6 +11,8 @@ export interface GuiCallbacks {
   erode(): void
   revert(): void
   preset(p: ViewPreset): void
+  /** Surface detail is pure shader uniforms — no remesh, no regeneration. */
+  detailChanged(): void
   /** Avatar settings that only need re-syncing, not regeneration. */
   avatarChanged(): void
   /** Drop the avatar back at the map centre. */
@@ -100,6 +102,24 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   look.add(params.render, 'sunElevation', 2, 88, 1).name('sun elevation').onChange(refresh)
   look.add(params.render, 'showWater').name('water').onChange(refresh)
   look.add(params.render, 'wireframe').onChange(refresh)
+
+  // --- Surface detail ---
+  const detailChanged = () => cb.detailChanged()
+  const det = gui.addFolder('Surface detail')
+  det.add(params.render.detail, 'enabled').onChange(detailChanged)
+  det.add(params.render.detail, 'scale', 1, 40, 0.5).name('grain size (m)').onChange(detailChanged)
+  det
+    .add(params.render.detail, 'macroScale', 10, 300, 1)
+    .name('mottle size (m)')
+    .onChange(detailChanged)
+  det
+    .add(params.render.detail, 'normalStrength', 0, 2, 0.01)
+    .name('bump strength')
+    .onChange(detailChanged)
+  det
+    .add(params.render.detail, 'albedoStrength', 0, 1, 0.01)
+    .name('colour variation')
+    .onChange(detailChanged)
 
   // --- Avatar ---
   const avatarChanged = () => cb.avatarChanged()
