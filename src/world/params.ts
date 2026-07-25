@@ -1,0 +1,163 @@
+/**
+ * Every knob the generator exposes. This object is what the GUI binds to and
+ * what gets posted to the worker, so it must stay structured-clone friendly:
+ * plain data only, no functions, no class instances.
+ *
+ * Heights produced by the pipeline are normalised to roughly [0, 1]. World
+ * units are applied only at mesh-build time via `cellSize` / `heightScale`.
+ * Keeping the heightmap unit-free is what lets the erosion constants below
+ * stay meaningful across map sizes.
+ */
+
+export interface NoiseParams {
+  enabled: boolean
+  octaves: number
+  frequency: number
+  lacunarity: number
+  persistence: number
+}
+
+export interface WarpParams {
+  enabled: boolean
+  strength: number
+  frequency: number
+}
+
+export interface RidgeParams {
+  enabled: boolean
+  /** Base height above which ridges start blending in. */
+  threshold: number
+  /** How strongly ridges replace the base shape at full weight. */
+  strength: number
+  octaves: number
+  frequency: number
+}
+
+export interface ShapeParams {
+  /** h = pow(h, k). >1 flattens lowlands and sharpens peaks. */
+  redistribution: number
+  /**
+   * Rescale the finished heightmap so its range fills [0, 1]. Without this the
+   * peak lands wherever the noise happens to put it (typically ~0.75 once the
+   * island mask has pulled things down), the top of the colour ramp is
+   * unreachable, and the erosion constants shift meaning every time you change
+   * an octave count.
+   */
+  normalize: boolean
+  islandMask: boolean
+  /** Normalised radius (0..1) at which the falloff to sea begins. */
+  falloffStart: number
+  /** Higher = a harder, more cliff-like coastal falloff. */
+  falloffPower: number
+  seaLevel: number
+}
+
+export interface ErosionParams {
+  droplets: number
+  radius: number
+  /** 0 = follow the gradient exactly, 1 = ignore it and carry straight on. */
+  inertia: number
+  capacityFactor: number
+  minSlope: number
+  erodeSpeed: number
+  depositSpeed: number
+  evaporation: number
+  gravity: number
+  maxLifetime: number
+  initialWater: number
+  initialSpeed: number
+}
+
+export interface RenderParams {
+  /** World units per grid cell. */
+  cellSize: number
+  /** World units spanned by a normalised height of 1.0. */
+  heightScale: number
+  sunAzimuth: number
+  sunElevation: number
+  wireframe: boolean
+  showWater: boolean
+}
+
+export interface WorldParams {
+  seed: string
+  /** Cells per side. Vertices per side is this + 1. */
+  mapSize: number
+  noise: NoiseParams
+  warp: WarpParams
+  ridges: RidgeParams
+  shape: ShapeParams
+  erosion: ErosionParams
+  render: RenderParams
+}
+
+export function defaultParams(): WorldParams {
+  return {
+    seed: 'karomi',
+    // 256 by default rather than 512: generation plus remeshing stays under a
+    // frame, so dragging a slider updates live. 512 is one dropdown away.
+    mapSize: 256,
+    noise: {
+      enabled: true,
+      octaves: 6,
+      frequency: 2.2,
+      lacunarity: 2.0,
+      persistence: 0.5,
+    },
+    warp: {
+      enabled: true,
+      strength: 0.18,
+      frequency: 1.4,
+    },
+    ridges: {
+      enabled: true,
+      threshold: 0.55,
+      strength: 0.6,
+      octaves: 5,
+      frequency: 3.0,
+    },
+    shape: {
+      redistribution: 1.35,
+      normalize: true,
+      islandMask: true,
+      falloffStart: 0.55,
+      falloffPower: 2.2,
+      seaLevel: 0.32,
+    },
+    erosion: {
+      droplets: 80_000,
+      radius: 3,
+      // Low inertia makes droplets hug the steepest descent, which on the
+      // island mask's smooth cone combs a fan of parallel gullies. A little
+      // more lets them wander and merge into branching channels.
+      inertia: 0.12,
+      capacityFactor: 4,
+      // Heights are normalised to [0,1] across the whole map, so a single cell
+      // step on a steep mountainside is only ~0.015. The published defaults
+      // for this algorithm (erodeSpeed 0.3) assume far more relief per cell and
+      // here they level every slope to flat in a handful of steps. These rates
+      // are scaled down to match.
+      minSlope: 0.002,
+      erodeSpeed: 0.045,
+      depositSpeed: 0.1,
+      evaporation: 0.01,
+      gravity: 4,
+      maxLifetime: 45,
+      initialWater: 1,
+      initialSpeed: 1,
+    },
+    render: {
+      cellSize: 1,
+      heightScale: 60,
+      sunAzimuth: 135,
+      sunElevation: 32,
+      wireframe: false,
+      showWater: true,
+    },
+  }
+}
+
+/** Deep copy — used to snapshot params alongside a generated heightmap. */
+export function cloneParams(p: WorldParams): WorldParams {
+  return structuredClone(p)
+}
