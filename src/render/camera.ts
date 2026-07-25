@@ -264,7 +264,7 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
     if (preset === 'follow' && followTarget) {
       snapFollow()
       restingDistance = cam?.followDistance ?? 22
-      orbitTo(followTarget, restingDistance, cam?.recenterPitch ?? 30)
+      orbitTo(followTarget, restingDistance, cam?.recenterPitch ?? 45)
       lastPivot.copy(pivot)
     } else if (preset === 'populous') {
       // High and wide, whole island framed — the strategy view.

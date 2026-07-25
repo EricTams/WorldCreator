@@ -47,7 +47,7 @@ depth, but strafing turns trail directly into screen offset.
 ### Camera auto-recentre
 
 After **2.5 s without rotating**, the camera eases back to a resting
-orientation: north up, pitched 30° below horizontal. The compass ring lights up
+orientation: north up, pitched 45° below horizontal. The compass ring lights up
 while this is happening, so the view moving on its own reads as a feature rather
 than a bug.
 
@@ -67,7 +67,7 @@ resting distance, so pulling back to look at the whole map is never undone.
 Worth knowing: the resting pitch is global, so it wins over the view presets a
 couple of seconds after you click one. The presets are all north-up already so
 there's no jarring swing, but *Magic Carpet view* starts at 12° and will drift
-up to 30°. If you want a preset's pitch to stick, either turn auto-recentre off
+up to 45°. If you want a preset's pitch to stick, either turn auto-recentre off
 or set the resting pitch to match.
 
 ## Running it

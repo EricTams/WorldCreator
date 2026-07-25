@@ -265,7 +265,7 @@ export function defaultParams(): WorldParams {
     camera: {
       autoRecenter: true,
       recenterDelay: 2.5,
-      recenterPitch: 30,
+      recenterPitch: 45,
       recenterSpeed: 2.2,
       followDistance: 22,
       // 0.35s / 12 units let the avatar drift to almost half the frame width
