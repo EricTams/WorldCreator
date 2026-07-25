@@ -283,8 +283,8 @@ scene.renderer.setAnimationLoop(() => {
     avatar.updateMarkerVisibility(rig.camera)
   }
 
-  rig.update()
-  compass.update(rig.camera)
+  rig.update(dt, params.camera)
+  compass.update(rig.camera, rig.isSettling())
   scene.renderer.render(scene.scene, rig.camera)
 })
 

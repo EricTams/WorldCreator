@@ -11,6 +11,7 @@ import { bearingFromNorth } from '../game/avatar'
 export class Compass {
   readonly element: HTMLElement
   private rose: HTMLElement
+  private settling = false
   private readonly dir = new THREE.Vector3()
 
   constructor(parent: HTMLElement) {
@@ -30,12 +31,19 @@ export class Compass {
     this.rose = this.element.querySelector('.compass-rose') as HTMLElement
   }
 
-  update(camera: THREE.Camera): void {
+  update(camera: THREE.Camera, settling = false): void {
     camera.getWorldDirection(this.dir)
     // Screen-up in the rose should be the direction the camera faces, so the
     // rose counter-rotates by the camera's bearing.
     const bearing = bearingFromNorth(this.dir.x, this.dir.z)
     this.rose.style.transform = `rotate(${-bearing}rad)`
+
+    // Highlight while the camera is easing itself back to north — otherwise
+    // the view drifting on its own reads as a bug rather than a feature.
+    if (settling !== this.settling) {
+      this.settling = settling
+      this.element.classList.toggle('is-settling', settling)
+    }
   }
 
   dispose(): void {

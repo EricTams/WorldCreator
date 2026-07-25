@@ -27,6 +27,26 @@ has gone after you orbit.
 The avatar carries a marker pole so you can find it from strategy altitude; it
 hides itself automatically once the camera is close enough to see the body.
 
+### Camera auto-recentre
+
+After **2.5 s without rotating**, the camera eases back to a resting
+orientation: north up, pitched 30° below horizontal. The compass ring lights up
+while this is happening, so the view moving on its own reads as a feature rather
+than a bug.
+
+Only *rotation* restarts the countdown. Zooming changes the orbit radius and
+panning changes the pivot — neither touches the orbit angles, so neither
+interrupts the settle. Holding a drag also suppresses it, so the camera never
+rotates out from under a pan in progress.
+
+Delay, resting pitch, settle speed, and an on/off switch are under *Camera*.
+
+Worth knowing: the resting pitch is global, so it wins over the view presets a
+couple of seconds after you click one. The presets are all north-up already so
+there's no jarring swing, but *Magic Carpet view* starts at 12° and will drift
+up to 30°. If you want a preset's pitch to stick, either turn auto-recentre off
+or set the resting pitch to match.
+
 ## Running it
 
 ```bash

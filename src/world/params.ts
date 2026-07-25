@@ -89,6 +89,17 @@ export interface AvatarParams {
   followCamera: boolean
 }
 
+export interface CameraParams {
+  /** Drift back to north-up at a fixed pitch once rotation stops. */
+  autoRecenter: boolean
+  /** Seconds of no rotation before the drift begins. */
+  recenterDelay: number
+  /** Resting pitch, in degrees below horizontal. */
+  recenterPitch: number
+  /** Ease rate; higher settles faster. */
+  recenterSpeed: number
+}
+
 export interface WorldParams {
   seed: string
   /** Cells per side. Vertices per side is this + 1. */
@@ -100,6 +111,7 @@ export interface WorldParams {
   erosion: ErosionParams
   render: RenderParams
   avatar: AvatarParams
+  camera: CameraParams
 }
 
 export function defaultParams(): WorldParams {
@@ -181,6 +193,12 @@ export function defaultParams(): WorldParams {
       fly: false,
       scale: 2.2,
       followCamera: true,
+    },
+    camera: {
+      autoRecenter: true,
+      recenterDelay: 2.5,
+      recenterPitch: 30,
+      recenterSpeed: 2.2,
     },
   }
 }

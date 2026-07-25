@@ -45,6 +45,11 @@
         border-radius: 50%;
         background: rgba(0, 0, 0, 0.42);
         border: 1px solid rgba(207, 227, 245, 0.28);
+        transition: border-color 180ms ease, box-shadow 180ms ease;
+      }
+      .compass.is-settling .compass-rose {
+        border-color: rgba(226, 101, 58, 0.85);
+        box-shadow: 0 0 10px rgba(226, 101, 58, 0.35);
       }
       .compass-needle {
         position: absolute;
