@@ -151,6 +151,15 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   cam.add(params.camera, 'recenterDelay', 0.2, 10, 0.1).name('delay (s)')
   cam.add(params.camera, 'recenterPitch', 5, 85, 1).name('resting pitch°')
   cam.add(params.camera, 'recenterSpeed', 0.3, 8, 0.1).name('settle speed')
+  // Re-applies the follow view so the new distance takes effect immediately
+  // rather than waiting for the next time the preset is clicked.
+  cam
+    .add(params.camera, 'followDistance', 4, 160, 1)
+    .name('follow distance')
+    .onChange(() => cb.preset('follow'))
+  cam.add(params.camera, 'followLag', 0, 1.5, 0.01).name('follow lag (s)')
+  cam.add(params.camera, 'followLeash', 1, 60, 1).name('max trail')
+  cam.add(params.camera, 'restoreDistance').name('restore distance')
   cam
     .add({ v: () => cb.preset('populous') }, 'v')
     .name('Populous view (whole map)')

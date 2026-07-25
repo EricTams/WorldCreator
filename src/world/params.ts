@@ -129,6 +129,18 @@ export interface CameraParams {
   recenterPitch: number
   /** Ease rate; higher settles faster. */
   recenterSpeed: number
+  /** Resting orbit distance while following the avatar, in world units. */
+  followDistance: number
+  /**
+   * Seconds for the orbit pivot to catch up to the avatar. 0 locks the camera
+   * rigidly to it; a little lag lets the avatar pull ahead of centre when it
+   * starts moving and settle back when it stops, which is what reads as motion.
+   */
+  followLag: number
+  /** Hard cap on how far the pivot may trail, so the avatar can't leave frame. */
+  followLeash: number
+  /** Also ease the orbit distance back to followDistance when settling. */
+  restoreDistance: boolean
 }
 
 export interface WorldParams {
@@ -255,6 +267,14 @@ export function defaultParams(): WorldParams {
       recenterDelay: 2.5,
       recenterPitch: 30,
       recenterSpeed: 2.2,
+      followDistance: 22,
+      // 0.35s / 12 units let the avatar drift to almost half the frame width
+      // when strafing, which at this distance put it behind the control panel.
+      // Lateral movement is the binding case: moving north mostly adds depth,
+      // but strafing turns trail directly into screen offset.
+      followLag: 0.22,
+      followLeash: 7,
+      restoreDistance: true,
     },
   }
 }

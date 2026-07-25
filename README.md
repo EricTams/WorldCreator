@@ -27,6 +27,23 @@ has gone after you orbit.
 The avatar carries a marker pole so you can find it from strategy altitude; it
 hides itself automatically once the camera is close enough to see the body.
 
+### Following the avatar
+
+The app opens in a close third-person view. The camera does **not** orbit the
+avatar directly — it orbits a damped pivot that chases it. Locked rigidly, the
+avatar sits nailed to the centre of the screen and movement reads as the world
+sliding past a tripod; with a little lag the avatar pulls ahead when it starts
+moving and settles back when it stops, which is what reads as motion.
+
+`follow lag` is the catch-up time constant, and `max trail` caps how far the
+pivot may ever fall behind. The cap matters: an exponential chase alone settles
+at `speed × lag` behind, which at a sprint walks the avatar off the edge of the
+frame. Measured with the defaults, the avatar stays within ±0.29 of frame centre
+in all four directions.
+
+Lateral movement is the binding case when tuning: heading north mostly adds
+depth, but strafing turns trail directly into screen offset.
+
 ### Camera auto-recentre
 
 After **2.5 s without rotating**, the camera eases back to a resting
@@ -40,6 +57,12 @@ interrupts the settle. Holding a drag also suppresses it, so the camera never
 rotates out from under a pan in progress.
 
 Delay, resting pitch, settle speed, and an on/off switch are under *Camera*.
+
+With `restore distance` on, the settle also eases the orbit distance back — but
+**only in the follow framing**. Applying it to every view drags the camera out
+of the whole-map overview and into the hillside two seconds after load, which is
+exactly what an early version did. The overview presets deliberately clear the
+resting distance, so pulling back to look at the whole map is never undone.
 
 Worth knowing: the resting pitch is global, so it wins over the view presets a
 couple of seconds after you click one. The presets are all north-up already so

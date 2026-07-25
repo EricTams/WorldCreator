@@ -88,6 +88,7 @@ let jobId = 0
 let baseHeights: Float32Array | null = null
 let current: Heightmap | null = null
 let erosionBusy = false
+let openedOnAvatar = false
 let stats = {
   genMs: 0,
   erodeMs: 0,
@@ -132,6 +133,13 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     baseHeights = heights.slice()
     current = new Heightmap(msg.size, heights)
     rebuildMesh(true)
+    // Open on the avatar rather than the overview — the close third-person
+    // framing is the default view now. Only on the very first build, so later
+    // regenerates don't yank you back out of whatever you were looking at.
+    if (!openedOnAvatar) {
+      openedOnAvatar = true
+      if (params.avatar.enabled) rig.apply('follow', params.camera)
+    }
   } else {
     stats.erodeMs = msg.erodeMs
     stats.amplifyMs = msg.amplifyMs
@@ -219,6 +227,9 @@ function rebuildMesh(refit: boolean): void {
   // The surface moved underneath it, so re-seat rather than leave it floating
   // or buried. Keeps its XZ unless the map size changed the world extent.
   settleAvatar(refit)
+  // A regenerate resets the avatar to the map centre, which is a teleport, not
+  // movement — the camera should be there already rather than flying across.
+  if (refit) rig.snapFollow()
   syncAvatarVisibility()
 }
 
@@ -277,12 +288,14 @@ const gui = buildGui(params, {
   },
   erode: runErosion,
   revert: revertErosion,
-  preset: (p: ViewPreset) => rig.apply(p),
+  preset: (p: ViewPreset) => rig.apply(p, params.camera),
   detailChanged: () => terrain.setDetail(params.render.detail),
   avatarChanged: syncAvatarVisibility,
   recallAvatar: () => {
     settleAvatar(true)
-    if (params.avatar.followCamera) rig.apply('follow')
+    // Teleporting the avatar must not make the camera chase it across the map.
+    rig.snapFollow()
+    if (params.avatar.followCamera) rig.apply('follow', params.camera)
   },
 })
 

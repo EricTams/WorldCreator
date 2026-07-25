@@ -13,12 +13,14 @@ export interface CameraRig {
    * fixed chase position — so you can orbit freely while moving.
    */
   follow(target: THREE.Vector3 | null): void
+  /** Drop the lagged pivot straight onto the target, skipping the catch-up. */
+  snapFollow(): void
   /**
    * Reconfigure clip planes and zoom limits for a world of the given extent,
    * so the same rig covers whole-map strategy zoom and near-ground flight.
    */
   fitToWorld(extent: number, heightScale: number): void
-  apply(preset: ViewPreset): void
+  apply(preset: ViewPreset, cam?: CameraParams): void
   resize(aspect: number): void
   update(dt: number, cam: CameraParams): void
   /** Seconds since the user last rotated. Exposed for the settling indicator. */
@@ -44,7 +46,12 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   let extent = 256
   let heightScale = 60
   let followTarget: THREE.Vector3 | null = null
-  const lastTarget = new THREE.Vector3()
+  // The camera orbits `pivot`, a damped point chasing the avatar — not the
+  // avatar itself. That trailing is the whole point: locked rigidly, movement
+  // reads as the world sliding past a fixed rig rather than the avatar moving.
+  const pivot = new THREE.Vector3()
+  const lastPivot = new THREE.Vector3()
+  let pivotReady = false
   const delta = new THREE.Vector3()
 
   // --- auto-recentre state ---
@@ -58,6 +65,11 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   // our own easing without OrbitControls telling us directly.
   let appliedTheta = Number.NaN
   let appliedPhi = Number.NaN
+  let appliedRadius = Number.NaN
+  // Non-zero only while the follow view is the chosen framing. The overview
+  // presets leave it at 0 so that deliberately pulling back to look at the
+  // whole map is never undone two seconds later.
+  let restingDistance = 0
 
   controls.addEventListener('start', () => {
     dragging = true
@@ -98,19 +110,45 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
 
   function follow(target: THREE.Vector3 | null): void {
     followTarget = target
-    if (target) lastTarget.copy(target)
+    if (!target) {
+      pivotReady = false
+      return
+    }
+    if (!pivotReady) snapFollow()
+  }
+
+  function snapFollow(): void {
+    if (!followTarget) return
+    pivot.copy(followTarget)
+    lastPivot.copy(followTarget)
+    pivotReady = true
   }
 
   function tick(dt: number, cam: CameraParams): void {
     if (followTarget) {
-      delta.subVectors(followTarget, lastTarget)
+      if (cam.followLag > 0.001) {
+        // Frame-rate independent exponential chase.
+        pivot.lerp(followTarget, 1 - Math.exp(-dt / cam.followLag))
+      } else {
+        pivot.copy(followTarget)
+      }
+
+      // Leash: at a sprint the exponential chase would settle at an arbitrary
+      // trailing distance and walk the avatar off the edge of the frame, so
+      // cap how far behind the pivot is ever allowed to sit.
+      const gap = pivot.distanceTo(followTarget)
+      if (gap > cam.followLeash) {
+        pivot.lerp(followTarget, (gap - cam.followLeash) / gap)
+      }
+
+      delta.subVectors(pivot, lastPivot)
       if (delta.lengthSq() > 0) {
         // Move the orbit pivot and the eye by the same amount, preserving the
         // user's chosen angle and distance. Translation only — the orbit
         // angles are untouched, so following never counts as rotating.
         controls.target.add(delta)
         camera.position.add(delta)
-        lastTarget.copy(followTarget)
+        lastPivot.copy(pivot)
       }
     }
 
@@ -119,12 +157,27 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
 
       // Zooming changes radius and panning changes the target; neither touches
       // theta/phi, so only actual rotation restarts the countdown.
+      // Distance is only part of the resting view in the follow framing.
+      // Applying it unconditionally drags the camera out of the whole-map
+      // overview and into the hillside a couple of seconds after load.
+      const restoringDistance =
+        cam.restoreDistance && followTarget !== null && restingDistance > 0
+
       const rotated =
         !Number.isNaN(appliedTheta) &&
         (Math.abs(shortestAngle(appliedTheta, spherical.theta)) > 1e-4 ||
           Math.abs(spherical.phi - appliedPhi) > 1e-4)
 
-      if (dragging || rotated) {
+      // Zoom normally leaves the countdown alone, since radius isn't part of
+      // the resting orientation. Once distance is being restored it *is* part
+      // of it, and ignoring zoom would undo the user's scroll the instant they
+      // made it.
+      const zoomed =
+        restoringDistance &&
+        !Number.isNaN(appliedRadius) &&
+        Math.abs(spherical.radius - appliedRadius) > Math.max(1e-3, appliedRadius * 1e-4)
+
+      if (dragging || rotated || zoomed) {
         idle = 0
         settling = false
       } else {
@@ -135,31 +188,46 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
         const wantPhi = polarForPitch(cam.recenterPitch)
         const dTheta = shortestAngle(spherical.theta, 0)
         const dPhi = wantPhi - spherical.phi
+        const dR = restoringDistance ? restingDistance - spherical.radius : 0
+
+        // Frame-rate independent exponential ease.
+        const k = 1 - Math.exp(-cam.recenterSpeed * dt)
+        let done = true
 
         if (Math.abs(dTheta) < 1e-3 && Math.abs(dPhi) < 1e-3) {
           // Land it exactly, otherwise the easing chases the target forever
           // and the epsilon test above stays permanently tripped.
           spherical.theta = 0
           spherical.phi = wantPhi
-          settling = false
         } else {
-          // Frame-rate independent exponential ease.
-          const k = 1 - Math.exp(-cam.recenterSpeed * dt)
           spherical.theta += dTheta * k
           spherical.phi += dPhi * k
-          settling = true
+          done = false
         }
+
+        if (restoringDistance) {
+          if (Math.abs(dR) < 0.01) {
+            spherical.radius = restingDistance
+          } else {
+            spherical.radius += dR * k
+            done = false
+          }
+        }
+
+        settling = !done
         writeOrbit()
       }
 
       readOrbit()
       appliedTheta = spherical.theta
       appliedPhi = spherical.phi
+      appliedRadius = spherical.radius
     } else {
       idle = 0
       settling = false
       appliedTheta = Number.NaN
       appliedPhi = Number.NaN
+      appliedRadius = Number.NaN
     }
 
     controls.update()
@@ -180,7 +248,10 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
     camera.far = extent * 16
     camera.updateProjectionMatrix()
 
-    controls.minDistance = extent * 0.02
+    // Absolute-ish rather than a fraction of extent: the close third-person
+    // distance is set by how big the avatar is, not how big the map is, and a
+    // proportional floor would forbid it entirely on a large map.
+    controls.minDistance = Math.max(1, extent * 0.002)
     controls.maxDistance = extent * 4
     // Stop the camera dropping below the ground plane when orbiting low.
     controls.maxPolarAngle = Math.PI * 0.495
@@ -189,16 +260,20 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
 
   const presetTarget = new THREE.Vector3()
 
-  function apply(preset: ViewPreset): void {
+  function apply(preset: ViewPreset, cam?: CameraParams): void {
     if (preset === 'follow' && followTarget) {
-      orbitTo(followTarget, extent * 0.09, 28)
-      lastTarget.copy(followTarget)
+      snapFollow()
+      restingDistance = cam?.followDistance ?? 22
+      orbitTo(followTarget, restingDistance, cam?.recenterPitch ?? 30)
+      lastPivot.copy(pivot)
     } else if (preset === 'populous') {
       // High and wide, whole island framed — the strategy view.
+      restingDistance = 0
       presetTarget.set(0, heightScale * 0.18, 0)
       orbitTo(presetTarget, extent * 1.05, 38)
     } else {
       // Down at the deck, looking out across the terrain.
+      restingDistance = 0
       presetTarget.set(0, heightScale * 0.3, 0)
       orbitTo(presetTarget, extent * 0.2, 12)
     }
@@ -214,6 +289,7 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
     camera,
     controls,
     follow,
+    snapFollow,
     fitToWorld,
     apply,
     resize,
