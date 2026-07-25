@@ -168,10 +168,16 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   function fitToWorld(newExtent: number, newHeightScale: number): void {
     extent = Math.max(newExtent, 1)
     heightScale = newHeightScale
-    camera.near = Math.max(0.1, extent / 4000)
-    // Far enough to contain the oversized sea plane, which the fog fades out
-    // long before this distance.
-    camera.far = extent * 30
+    // Depth precision is dominated by the near plane, and the shoreline is a
+    // guaranteed coplanar case: the water plane and the terrain surface meet
+    // exactly there. A near plane of extent/4000 left about 4cm of depth
+    // resolution at normal viewing distance, so the whole beach band z-fought
+    // and flickered as the camera moved. Keeping the ratio near 1:10000
+    // instead of 1:120000 gives roughly an order of magnitude more precision;
+    // nothing gets closer to the eye than this anyway.
+    camera.near = Math.max(0.25, extent / 600)
+    // Far enough to contain the sea plane, which the fog fades out long before.
+    camera.far = extent * 16
     camera.updateProjectionMatrix()
 
     controls.minDistance = extent * 0.02

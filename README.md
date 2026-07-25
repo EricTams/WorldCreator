@@ -86,6 +86,7 @@ Six stages, each toggleable in the panel so you can see what it contributes.
 | 5 | **Island mask** | Radial falloff from the map centre, so the land descends into water at the edges. |
 | 5b | **Normalise** | Rescales the result to fill `[0, 1]`. Without it the peak lands wherever the noise happens to put it (~0.75 after masking), the top of the colour ramp is unreachable, and the erosion constants shift meaning whenever you change an octave count. |
 | 6 | **Hydraulic erosion** | Droplet simulation — see below. |
+| 7 | **Detail amplification** | Subdivide and synthesise fine structure — see below. |
 
 Same seed always produces the same island, erosion included.
 
@@ -134,6 +135,42 @@ raise **height scale** or lower **cell size** under *Look*; `redistribution`
 and ridge `strength` under *Shape* and *Ridged mountains* control how spiky
 rather than how tall.
 
+## Detail amplification
+
+Erosion runs at the simulation grid; amplification then subdivides the result
+and synthesises the fine structure the simulation never had.
+
+The point is cost. Erosion at 2048² would take tens of seconds, and its features
+— drainage networks, valley floors, sediment fans — are large-scale anyway, so
+almost all of that time buys nothing you can see. Measured, from a 256²
+simulation grid:
+
+| Levels | Render grid | Triangles | Erode | Amplify | Frame rate |
+|---|---|---|---|---|---|
+| 0 | 256² | 131k | 0.20 s | — | 120 fps |
+| 2 (default) | 1024² | 2.1M | 0.20 s | **0.04 s** | 120 fps |
+| 3 | 2048² | 8.4M | 0.20 s | **0.13 s** | 120 fps |
+
+**The trade is real and worth stating: the channels stay at simulation
+resolution.** What you gain is surface structure, not finer rivers. If you want
+finer drainage, raise `map size` — that's what it's for.
+
+Three things that matter in the implementation:
+
+- **Bicubic, not bilinear.** Bilinear upsampling is only C0, so every original
+  cell boundary keeps a derivative discontinuity that lights up as a visible
+  crease once the surface is shaded. Catmull-Rom is C1 and leaves none.
+- **One octave per level, not one broadband pass at the end.** Detail is added
+  after each doubling, at that level's scale, so the levels together *are* the
+  fractal. Adding it all at final resolution looks visibly wrong by comparison.
+- **Slope weighting is what stops it looking like noise smeared over
+  everything.** Erosion works hard to produce flat sediment plains, valley
+  floors and beaches; roughening those undoes it. Steep faces take the detail,
+  flats keep only `detail on flats` of it.
+
+`ridged` ("rockiness") blends between rounded swells and sharp creases. Past
+about 0.3 at high frequency it starts to look like fur rather than rock.
+
 ## Surface detail
 
 Close-up quality comes from the material, not from geometry. The terrain mesh is
@@ -181,7 +218,13 @@ preferable to skirts, which are visibly wrong at exactly the grazing ground-leve
 angles this is meant to improve. `TerrainMesh.refresh()` already takes a dirty
 rectangle, so only tiles whose level changed need rebuilding.
 
-At 512² (524k triangles) none of this is necessary yet.
+**Still not necessary, by a wider margin than expected.** 8.4M triangles holds
+120 fps. Two things carry it: tile size scales with the grid so the draw call
+count stays near 16×16 whatever the resolution, and per-tile frustum culling
+means most of the map never reaches the GPU at ground level. The binding
+constraint at 2048² is vertex-buffer memory (~185 MB), not fill or draw calls —
+so the first real symptom on weaker hardware will be allocation failure rather
+than a slow frame rate. That, not frame time, is the thing to watch for.
 
 ## Implementation notes
 
@@ -197,6 +240,18 @@ faces inside that tile, so every vertex on a tile border would derive its normal
 from half its true neighbourhood and the seams would show as hard creases under
 raking light. Sampling the shared array means two tiles that meet compute
 bit-identical normals for their shared vertices.
+
+**The depth range is kept tight, and the water is polygon-offset.** At the
+shoreline the water plane and the terrain surface are exactly coplanar — that is
+what a shoreline *is* — so the depth comparison there is a coin flip per pixel
+per frame, which shows up as flickering along the whole beach as the camera
+moves. Depth precision is dominated by the near plane, and an early
+`near = extent/4000` left roughly 4 cm of depth resolution at normal viewing
+distance, which the beach band sits well inside. The near plane now keeps the
+ratio near 1:10000 rather than 1:120000. Precision alone never fully resolves
+coplanar surfaces though, so the water also carries a small negative
+`polygonOffset` to make it win the tie consistently — and "water laps over the
+last centimetre of beach" is the right answer visually as well as the stable one.
 
 **The ocean floor is a separate plane.** The island mask drives the terrain's
 border down to height 0, so without it the terrain's square edge is plainly

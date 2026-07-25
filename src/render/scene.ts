@@ -70,6 +70,18 @@ export function createScene(canvasParent: HTMLElement): SceneBundle {
     roughness: 0.12,
     metalness: 0.15,
     side: THREE.DoubleSide,
+    // At the shoreline the water plane and the terrain are exactly coplanar,
+    // which no amount of depth precision resolves — the comparison is a coin
+    // flip per pixel per frame, which is the flicker. A small negative offset
+    // biases water consistently towards the eye so it always wins there, and
+    // "water laps over the last centimetre of beach" is the right answer
+    // visually as well as the stable one.
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -2,
+    // Transparent surfaces should not write depth; the sea is a single plane
+    // so nothing needs to depth-test against it.
+    depthWrite: false,
   })
   const water = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), waterMaterial)
   water.rotation.x = -Math.PI / 2
@@ -79,7 +91,9 @@ export function createScene(canvasParent: HTMLElement): SceneBundle {
   function setEnvironment(seaLevel: number, heightScale: number, extent: number): void {
     // The sea runs well past the island; its outer edge sits deep inside the
     // fog, so what you see is a horizon rather than a boundary.
-    const span = extent * 40
+    // Kept within the far plane with room to spare; the fog has fully taken
+    // over by extent*9, so the sea's outer edge is never visible anyway.
+    const span = extent * 20
     water.geometry.dispose()
     water.geometry = new THREE.PlaneGeometry(span, span)
     water.position.y = seaLevel * heightScale
@@ -88,7 +102,7 @@ export function createScene(canvasParent: HTMLElement): SceneBundle {
     oceanFloor.geometry = new THREE.PlaneGeometry(span, span)
     // Just below the terrain's zeroed border, so it reads as the same seabed
     // rather than a second surface, and doesn't z-fight with it.
-    oceanFloor.position.y = -0.01 * heightScale
+    oceanFloor.position.y = -0.02 * heightScale
 
     const fog = scene.fog as THREE.Fog
     fog.near = extent * 1.5

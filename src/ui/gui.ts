@@ -78,7 +78,7 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   const erosion = gui.addFolder('Hydraulic erosion')
   const erodeBtn = erosion
     .add({ run: () => cb.erode() }, 'run')
-    .name('▶ Erode')
+    .name('▶ Erode + amplify')
   const revertBtn = erosion
     .add({ revert: () => cb.revert() }, 'revert')
     .name('↺ Revert to un-eroded')
@@ -93,6 +93,19 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   erosion.add(params.erosion, 'gravity', 0.5, 20, 0.5)
   erosion.add(params.erosion, 'maxLifetime', 5, 100, 1).name('droplet lifetime')
   erosion.close()
+
+  // --- Amplification ---
+  const amp = gui.addFolder('Detail amplification')
+  amp.add(params.amplify, 'enabled')
+  amp.add(params.amplify, 'levels', 0, 3, 1).name('subdivisions (×2 each)')
+  amp.add(params.amplify, 'amplitude', 0, 0.05, 0.001).name('detail height')
+  amp.add(params.amplify, 'persistence', 0.2, 0.9, 0.05).name('falloff / level')
+  amp.add(params.amplify, 'frequencyScale', 0.04, 0.4, 0.01).name('detail frequency')
+  amp.add(params.amplify, 'ridged', 0, 1, 0.05).name('rockiness')
+  amp.add(params.amplify, 'slopeLo', 0, 2, 0.05).name('slope: start')
+  amp.add(params.amplify, 'slopeHi', 0.1, 4, 0.05).name('slope: full')
+  amp.add(params.amplify, 'flatFloor', 0, 0.5, 0.01).name('detail on flats')
+  amp.close()
 
   // --- Look ---
   const look = gui.addFolder('Look')

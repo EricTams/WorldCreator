@@ -77,7 +77,11 @@ export class TerrainMesh {
     this.disposeTiles()
 
     const cells = hm.size - 1
-    const tileSize = Math.max(8, Math.min(this.opts.tileSize, cells))
+    // Scale the tile with the grid so the tile count — and therefore the draw
+    // call count — stays near 16×16 whatever the resolution. A fixed 64-cell
+    // tile would mean 1024 draw calls once amplification reaches 2048².
+    const target = Math.max(32, Math.min(256, Math.round(cells / 16)))
+    const tileSize = Math.max(8, Math.min(target, cells))
     const tilesPerSide = Math.ceil(cells / tileSize)
 
     for (let tz = 0; tz < tilesPerSide; tz++) {

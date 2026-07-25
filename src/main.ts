@@ -34,12 +34,26 @@ const avatar = new Avatar()
 scene.scene.add(avatar.object)
 const compass = new Compass(document.body)
 
+/**
+ * World units per cell of the *current* heightmap.
+ *
+ * Amplification subdivides the grid after generation, so the render grid can be
+ * several times finer than `mapSize`. Deriving the cell size from the world
+ * width keeps the island exactly the same size on screen however many levels
+ * are applied — otherwise amplifying would silently quadruple the world.
+ */
+function effectiveCellSize(): number {
+  const worldWidth = params.mapSize * params.render.cellSize
+  const cells = current ? current.size - 1 : params.mapSize
+  return worldWidth / Math.max(1, cells)
+}
+
 /** Everything the avatar needs to sit on the current terrain. */
 function terrainFrame(): TerrainFrame | null {
   if (!current) return null
   return {
     heightmap: current,
-    cellSize: params.render.cellSize,
+    cellSize: effectiveCellSize(),
     heightScale: params.render.heightScale,
     seaLevel: params.shape.seaLevel,
   }
@@ -74,7 +88,14 @@ let jobId = 0
 let baseHeights: Float32Array | null = null
 let current: Heightmap | null = null
 let erosionBusy = false
-let stats = { genMs: 0, erodeMs: 0, eroded: false, progress: 0 }
+let stats = {
+  genMs: 0,
+  erodeMs: 0,
+  amplifyMs: 0,
+  eroded: false,
+  progress: 0,
+  phase: '' as string,
+}
 
 function post(msg: WorkerRequest, transfer?: Transferable[]): void {
   worker.postMessage(msg, transfer ?? [])
@@ -88,6 +109,7 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
 
   if (msg.type === 'progress') {
     stats.progress = msg.frac
+    stats.phase = msg.phase
     updateStatus()
     return
   }
@@ -105,17 +127,22 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
   if (msg.phase === 'generate') {
     stats.genMs = msg.ms
     stats.erodeMs = 0
+    stats.amplifyMs = 0
     stats.eroded = false
     baseHeights = heights.slice()
     current = new Heightmap(msg.size, heights)
     rebuildMesh(true)
   } else {
-    stats.erodeMs = msg.ms
+    stats.erodeMs = msg.erodeMs
+    stats.amplifyMs = msg.amplifyMs
     stats.eroded = true
     stats.progress = 0
+    stats.phase = ''
     erosionBusy = false
     gui.setErosionBusy(false)
     current = new Heightmap(msg.size, heights)
+    // Amplification changes the grid resolution, so the camera limits, water
+    // and avatar footing all need re-deriving — but not the framing.
     rebuildMesh(false)
   }
   updateStatus()
@@ -152,10 +179,12 @@ function runErosion(): void {
   const copy = baseHeights.slice()
   post(
     {
-      type: 'erode',
+      type: 'refine',
       jobId,
       params: structuredClone(params),
-      size: current.size,
+      // The simulation grid, not the current one — a previous refine may have
+      // left `current` subdivided, and re-refining that would compound.
+      size: params.mapSize + 1,
       heights: copy.buffer as ArrayBuffer,
     },
     [copy.buffer as ArrayBuffer],
@@ -163,10 +192,13 @@ function runErosion(): void {
 }
 
 function revertErosion(): void {
-  if (!baseHeights || !current) return
-  current = new Heightmap(current.size, baseHeights.slice())
+  if (!baseHeights) return
+  // Back to the simulation grid, which is what baseHeights is sized for —
+  // `current` may have been subdivided by amplification since.
+  current = new Heightmap(params.mapSize + 1, baseHeights.slice())
   stats.eroded = false
   stats.erodeMs = 0
+  stats.amplifyMs = 0
   rebuildMesh(false)
   updateStatus()
 }
@@ -175,7 +207,7 @@ function revertErosion(): void {
 function rebuildMesh(refit: boolean): void {
   if (!current) return
   terrain.build(current, {
-    cellSize: params.render.cellSize,
+    cellSize: effectiveCellSize(),
     heightScale: params.render.heightScale,
     seaLevel: params.shape.seaLevel,
     wireframe: params.render.wireframe,
@@ -210,13 +242,25 @@ function refreshLook(): void {
 
 function updateStatus(): void {
   const parts: string[] = []
-  parts.push(`seed ${params.seed}   ${params.mapSize}²`)
+  const grid = current ? current.size - 1 : params.mapSize
+  parts.push(
+    grid === params.mapSize
+      ? `seed ${params.seed}   ${params.mapSize}²`
+      : `seed ${params.seed}   ${params.mapSize}² → ${grid}²`,
+  )
   parts.push(`${(terrain.triangleCount / 1000).toFixed(0)}k tris`)
   parts.push(`gen ${stats.genMs.toFixed(0)} ms`)
   if (erosionBusy) {
-    parts.push(`eroding ${(stats.progress * 100).toFixed(0)}%`)
+    parts.push(
+      stats.phase === 'amplify'
+        ? 'amplifying…'
+        : `eroding ${(stats.progress * 100).toFixed(0)}%`,
+    )
   } else if (stats.eroded) {
     parts.push(`eroded ${(stats.erodeMs / 1000).toFixed(2)} s`)
+    if (stats.amplifyMs > 0) {
+      parts.push(`amplified ${(stats.amplifyMs / 1000).toFixed(2)} s`)
+    }
   }
   statusEl.textContent = parts.join('   ·   ')
 }

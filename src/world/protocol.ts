@@ -7,16 +7,16 @@ import type { WorldParams } from './params'
  * point of having a worker).
  */
 
-export type Phase = 'generate' | 'erode'
+export type Phase = 'generate' | 'erode' | 'amplify'
 
 export type WorkerRequest =
   | { type: 'generate'; jobId: number; params: WorldParams }
   | {
-      type: 'erode'
+      type: 'refine'
       jobId: number
       params: WorldParams
       size: number
-      /** Transferred. The main thread keeps its own pre-erosion copy. */
+      /** Transferred. The main thread keeps its own pre-refine copy. */
       heights: ArrayBuffer
     }
 
@@ -26,8 +26,11 @@ export type WorkerResponse =
       type: 'done'
       jobId: number
       phase: Phase
+      /** May exceed the simulation grid when amplification subdivided it. */
       size: number
       heights: ArrayBuffer
+      erodeMs: number
+      amplifyMs: number
       ms: number
     }
   | { type: 'error'; jobId: number; message: string }

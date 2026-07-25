@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { amplify } from './amplify'
 import { erode } from './erosion'
 import { generateHeightmap } from './generate'
 import { Heightmap } from './heightmap'
@@ -31,6 +32,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           phase: 'generate',
           size: hm.size,
           heights: hm.data.buffer as ArrayBuffer,
+          erodeMs: 0,
+          amplifyMs: 0,
           ms: performance.now() - started,
         },
         [hm.data.buffer as ArrayBuffer],
@@ -38,12 +41,36 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       return
     }
 
-    if (req.type === 'erode') {
-      const hm = new Heightmap(req.size, new Float32Array(req.heights))
-      const rng = makeRng(req.params.seed, 'erosion')
-      const result = erode(hm, req.params.erosion, req.params.shape.seaLevel, rng, (frac) => {
-        post({ type: 'progress', jobId: req.jobId, phase: 'erode', frac })
-      })
+    if (req.type === 'refine') {
+      const started = performance.now()
+      let hm = new Heightmap(req.size, new Float32Array(req.heights))
+
+      // Erosion first, at the simulation resolution — its features are
+      // large-scale, so running it on the subdivided grid would cost an order
+      // of magnitude more for detail you cannot see.
+      let erodeMs = 0
+      if (req.params.erosion.droplets > 0) {
+        const rng = makeRng(req.params.seed, 'erosion')
+        const result = erode(
+          hm,
+          req.params.erosion,
+          req.params.shape.seaLevel,
+          rng,
+          (frac) => {
+            post({ type: 'progress', jobId: req.jobId, phase: 'erode', frac })
+          },
+        )
+        erodeMs = result.ms
+      }
+
+      let amplifyMs = 0
+      if (req.params.amplify.enabled) {
+        post({ type: 'progress', jobId: req.jobId, phase: 'amplify', frac: 0 })
+        const amped = amplify(hm, req.params.amplify, req.params.seed)
+        hm = amped.heightmap
+        amplifyMs = amped.result.ms
+      }
+
       post(
         {
           type: 'done',
@@ -51,7 +78,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           phase: 'erode',
           size: hm.size,
           heights: hm.data.buffer as ArrayBuffer,
-          ms: result.ms,
+          erodeMs,
+          amplifyMs,
+          ms: performance.now() - started,
         },
         [hm.data.buffer as ArrayBuffer],
       )

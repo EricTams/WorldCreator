@@ -78,6 +78,26 @@ export interface DetailParams {
   albedoStrength: number
 }
 
+export interface AmplifyParams {
+  enabled: boolean
+  /** Resolution doublings applied after erosion. Each one quadruples triangles. */
+  levels: number
+  /** Detail height at the first level, in normalised height units. */
+  amplitude: number
+  /** Amplitude falloff per level. */
+  persistence: number
+  /** Detail frequency as a fraction of the grid resolution. */
+  frequencyScale: number
+  /** 0 = rounded swells, 1 = sharp rocky creases. */
+  ridged: number
+  /** Slope below which detail is suppressed. */
+  slopeLo: number
+  /** Slope at which detail reaches full strength. */
+  slopeHi: number
+  /** How much detail flat ground keeps. */
+  flatFloor: number
+}
+
 export interface RenderParams {
   /** World units per grid cell. */
   cellSize: number
@@ -120,6 +140,7 @@ export interface WorldParams {
   ridges: RidgeParams
   shape: ShapeParams
   erosion: ErosionParams
+  amplify: AmplifyParams
   render: RenderParams
   avatar: AvatarParams
   camera: CameraParams
@@ -182,6 +203,19 @@ export function defaultParams(): WorldParams {
       maxLifetime: 45,
       initialWater: 1,
       initialSpeed: 1,
+    },
+    amplify: {
+      enabled: true,
+      // 2 levels takes the default 256 simulation grid to a 1024 render grid
+      // (2.1M triangles). 3 is 8.4M and wants LOD first.
+      levels: 2,
+      amplitude: 0.012,
+      persistence: 0.55,
+      frequencyScale: 0.16,
+      ridged: 0.5,
+      slopeLo: 0.15,
+      slopeHi: 1.2,
+      flatFloor: 0.08,
     },
     render: {
       // Relief is really the ratio of heightScale to the map's world width.
