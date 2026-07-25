@@ -1,6 +1,10 @@
+import * as THREE from 'three'
+import { Avatar, type TerrainFrame } from './game/avatar'
+import { Keyboard } from './game/input'
 import { createCameraRig, type ViewPreset } from './render/camera'
 import { createScene } from './render/scene'
 import { TerrainMesh } from './render/terrainMesh'
+import { Compass } from './ui/compass'
 import { buildGui } from './ui/gui'
 import { Heightmap } from './world/heightmap'
 import { defaultParams } from './world/params'
@@ -22,6 +26,40 @@ const terrain = new TerrainMesh({
   wireframe: params.render.wireframe,
 })
 scene.scene.add(terrain.group)
+
+const keys = new Keyboard()
+const avatar = new Avatar()
+scene.scene.add(avatar.object)
+const compass = new Compass(document.body)
+
+/** Everything the avatar needs to sit on the current terrain. */
+function terrainFrame(): TerrainFrame | null {
+  if (!current) return null
+  return {
+    heightmap: current,
+    cellSize: params.render.cellSize,
+    heightScale: params.render.heightScale,
+    seaLevel: params.shape.seaLevel,
+  }
+}
+
+function syncAvatarVisibility(): void {
+  avatar.object.visible = params.avatar.enabled
+  avatar.setScale(params.avatar.scale)
+  rig.follow(params.avatar.enabled && params.avatar.followCamera ? avatar.position : null)
+}
+
+/**
+ * Put the avatar somewhere sensible: keep its XZ if it already has one (so a
+ * regenerate doesn't teleport you), otherwise start it at the map centre.
+ */
+function settleAvatar(reset: boolean): void {
+  const frame = terrainFrame()
+  if (!frame) return
+  const x = reset ? 0 : avatar.position.x
+  const z = reset ? 0 : avatar.position.z
+  avatar.placeAt(frame, x, z, params.avatar)
+}
 
 // --- generation worker -------------------------------------------------------
 
@@ -144,6 +182,10 @@ function rebuildMesh(refit: boolean): void {
   if (refit) {
     rig.fitToWorld(terrain.worldSize, params.render.heightScale)
   }
+  // The surface moved underneath it, so re-seat rather than leave it floating
+  // or buried. Keeps its XZ unless the map size changed the world extent.
+  settleAvatar(refit)
+  syncAvatarVisibility()
 }
 
 /** Scene-level settings that don't require re-meshing. */
@@ -189,6 +231,11 @@ const gui = buildGui(params, {
   erode: runErosion,
   revert: revertErosion,
   preset: (p: ViewPreset) => rig.apply(p),
+  avatarChanged: syncAvatarVisibility,
+  recallAvatar: () => {
+    settleAvatar(true)
+    if (params.avatar.followCamera) rig.apply('follow')
+  },
 })
 
 // Console handle for tuning without round-tripping through the panel:
@@ -202,6 +249,9 @@ if (import.meta.env.DEV) {
       revert: revertErosion,
       heights: () => current,
       gui,
+      avatar,
+      rig,
+      keys,
     },
   })
 }
@@ -220,8 +270,21 @@ onResize()
 rig.fitToWorld(params.mapSize * params.render.cellSize, params.render.heightScale)
 rig.apply('populous')
 
+const clock = new THREE.Clock()
+
 scene.renderer.setAnimationLoop(() => {
+  // Clamped so a backgrounded tab doesn't resume with a huge step that
+  // teleports the avatar across the map.
+  const dt = Math.min(clock.getDelta(), 0.1)
+
+  const frame = terrainFrame()
+  if (frame && params.avatar.enabled) {
+    avatar.update(dt, keys, frame, params.avatar)
+    avatar.updateMarkerVisibility(rig.camera)
+  }
+
   rig.update()
+  compass.update(rig.camera)
   scene.renderer.render(scene.scene, rig.camera)
 })
 

@@ -11,6 +11,10 @@ export interface GuiCallbacks {
   erode(): void
   revert(): void
   preset(p: ViewPreset): void
+  /** Avatar settings that only need re-syncing, not regeneration. */
+  avatarChanged(): void
+  /** Drop the avatar back at the map centre. */
+  recallAvatar(): void
 }
 
 export interface GuiHandles {
@@ -97,6 +101,17 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   look.add(params.render, 'showWater').name('water').onChange(refresh)
   look.add(params.render, 'wireframe').onChange(refresh)
 
+  // --- Avatar ---
+  const avatarChanged = () => cb.avatarChanged()
+  const av = gui.addFolder('Avatar')
+  av.add(params.avatar, 'enabled').onChange(avatarChanged)
+  av.add({ v: () => cb.recallAvatar() }, 'v').name('⌖ Recall to centre')
+  av.add(params.avatar, 'fly').name('fly mode (Space / Shift)')
+  av.add(params.avatar, 'walkSpeed', 2, 150, 1).name('walk speed')
+  av.add(params.avatar, 'flySpeed', 5, 300, 1).name('fly speed')
+  av.add(params.avatar, 'scale', 0.5, 8, 0.1).onChange(avatarChanged)
+  av.add(params.avatar, 'followCamera').name('camera follows').onChange(avatarChanged)
+
   // --- Camera ---
   const cam = gui.addFolder('Camera')
   cam
@@ -105,6 +120,7 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   cam
     .add({ v: () => cb.preset('magicCarpet') }, 'v')
     .name('Magic Carpet view (ground)')
+  cam.add({ v: () => cb.preset('follow') }, 'v').name('Behind the avatar')
 
   return {
     gui,

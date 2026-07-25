@@ -1,11 +1,17 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
-export type ViewPreset = 'populous' | 'magicCarpet'
+export type ViewPreset = 'populous' | 'magicCarpet' | 'follow'
 
 export interface CameraRig {
   camera: THREE.PerspectiveCamera
   controls: OrbitControls
+  /**
+   * Track a moving point. The camera keeps whatever orbit offset the user has
+   * dragged out and translates with the target, rather than snapping to a
+   * fixed chase position — so you can orbit freely while moving.
+   */
+  follow(target: THREE.Vector3 | null): void
   /**
    * Reconfigure clip planes and zoom limits for a world of the given extent,
    * so the same rig covers whole-map strategy zoom and near-ground flight.
@@ -25,6 +31,28 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
 
   let extent = 256
   let heightScale = 60
+  let followTarget: THREE.Vector3 | null = null
+  const lastTarget = new THREE.Vector3()
+  const delta = new THREE.Vector3()
+
+  function follow(target: THREE.Vector3 | null): void {
+    followTarget = target
+    if (target) lastTarget.copy(target)
+  }
+
+  function tick(): void {
+    if (followTarget) {
+      delta.subVectors(followTarget, lastTarget)
+      if (delta.lengthSq() > 0) {
+        // Move the orbit pivot and the eye by the same amount, preserving the
+        // user's chosen angle and distance.
+        controls.target.add(delta)
+        camera.position.add(delta)
+        lastTarget.copy(followTarget)
+      }
+    }
+    controls.update()
+  }
 
   function fitToWorld(newExtent: number, newHeightScale: number): void {
     extent = Math.max(newExtent, 1)
@@ -43,7 +71,17 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   }
 
   function apply(preset: ViewPreset): void {
-    if (preset === 'populous') {
+    if (preset === 'follow' && followTarget) {
+      // Over the avatar's shoulder, looking north — the direction W drives.
+      const d = extent * 0.09
+      camera.position.set(
+        followTarget.x,
+        followTarget.y + d * 0.55,
+        followTarget.z + d,
+      )
+      controls.target.copy(followTarget)
+      lastTarget.copy(followTarget)
+    } else if (preset === 'populous') {
       // High and angled, whole island framed — the strategy view.
       const d = extent * 0.9
       camera.position.set(d * 0.62, d * 0.66, d * 0.62)
@@ -65,9 +103,10 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   return {
     camera,
     controls,
+    follow,
     fitToWorld,
     apply,
     resize,
-    update: () => controls.update(),
+    update: tick,
   }
 }

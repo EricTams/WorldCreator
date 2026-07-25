@@ -27,6 +27,70 @@
       canvas {
         display: block;
       }
+      .compass {
+        position: fixed;
+        left: 16px;
+        top: 16px;
+        width: 84px;
+        text-align: center;
+        color: #cfe3f5;
+        font-size: 11px;
+        pointer-events: none;
+        user-select: none;
+      }
+      .compass-rose {
+        position: relative;
+        width: 84px;
+        height: 84px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.42);
+        border: 1px solid rgba(207, 227, 245, 0.28);
+      }
+      .compass-needle {
+        position: absolute;
+        left: 50%;
+        top: 9px;
+        width: 0;
+        height: 0;
+        margin-left: -6px;
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        border-bottom: 17px solid #e2653a;
+      }
+      .compass-label {
+        position: absolute;
+        font-size: 10px;
+        line-height: 1;
+        opacity: 0.75;
+      }
+      .compass-n {
+        top: 28px;
+        left: 50%;
+        margin-left: -3px;
+        opacity: 1;
+        font-weight: 700;
+      }
+      .compass-s {
+        bottom: 4px;
+        left: 50%;
+        margin-left: -3px;
+      }
+      .compass-e {
+        right: 5px;
+        top: 50%;
+        margin-top: -5px;
+      }
+      .compass-w {
+        left: 5px;
+        top: 50%;
+        margin-top: -5px;
+      }
+      .compass-keys {
+        margin-top: 5px;
+        letter-spacing: 1.5px;
+        opacity: 0.6;
+      }
+
       #status {
         position: fixed;
         left: 12px;

@@ -9,6 +9,24 @@ networks into it, and everything is exposed as live controls. This is the
 foundation for a game in the Populous / Magic Carpet mould — a bounded,
 deformable landscape you can view from strategy altitude or from the deck.
 
+## Controls
+
+| Key | Action |
+|-----|--------|
+| **W A S D** | Move the avatar **north / west / south / east** |
+| **Space / Shift** | Ascend / descend (fly mode only) |
+| Mouse drag | Orbit · scroll to zoom |
+
+Movement is in **fixed world directions, not relative to the camera** — W is
+always north however you've orbited the view. That keeps the map's geography
+stable in your head: a place stays north-east of another place whichever way
+you happen to be looking, which is how the strategy games this is aiming at
+behave. North is `-Z`, east is `+X`, and the corner compass shows where north
+has gone after you orbit.
+
+The avatar carries a marker pole so you can find it from strategy altitude; it
+hides itself automatically once the camera is close enough to see the body.
+
 ## Running it
 
 ```bash
@@ -26,7 +44,8 @@ Pushing to `main` builds and deploys to GitHub Pages automatically.
 src/
   world/     the generator — pure TypeScript, imports nothing from Three.js
   render/    turns a height array into meshes
-  ui/        the lil-gui control panel
+  game/      avatar and input
+  ui/        the lil-gui control panel and compass
 ```
 
 The split matters. `world/` takes `(seed, params)` and returns a
@@ -82,6 +101,19 @@ The map defaults to 256² so the tweak loop stays under a frame. 512² looks
 considerably better once you've stopped fiddling — the drainage networks only
 really read as dendritic at that resolution.
 
+## Tuning the relief
+
+Relief is really the **ratio of `heightScale` to the map's world width**
+(`mapSize × cellSize`), not `heightScale` on its own. The defaults give
+`42 / (256 × 2)` ≈ **8%** — clearly hilly, but you can cross a valley without
+scaling a wall.
+
+The original defaults were `60 / (256 × 1)` ≈ 23%, which looks dramatic from
+orbit and is miserable to actually move through. If you want the drama back,
+raise **height scale** or lower **cell size** under *Look*; `redistribution`
+and ridge `strength` under *Shape* and *Ridged mountains* control how spiky
+rather than how tall.
+
 ## Implementation notes
 
 **Tiled meshing.** The terrain is built as a grid of 64-cell tiles rather than
@@ -127,5 +159,8 @@ __world.erode()
 
 Terrain sculpting brushes, prop and model decoration via instanced meshes,
 biomes beyond the colour ramp, rivers and lakes as real water bodies, LOD, and
-anything resembling gameplay. The tiled meshing and the Three-free `world/`
+anything resembling gameplay. The avatar is a stand-in, not a character
+controller — no collision volume, no slope limit, no acceleration. It samples
+the heightmap and sits on it, which is enough to answer "does this landscape
+feel good to move through". The tiled meshing and the Three-free `world/`
 module are the two structural choices that keep those cheap to add.

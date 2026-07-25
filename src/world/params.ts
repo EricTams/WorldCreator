@@ -79,6 +79,16 @@ export interface RenderParams {
   showWater: boolean
 }
 
+export interface AvatarParams {
+  enabled: boolean
+  walkSpeed: number
+  flySpeed: number
+  hover: number
+  fly: boolean
+  scale: number
+  followCamera: boolean
+}
+
 export interface WorldParams {
   seed: string
   /** Cells per side. Vertices per side is this + 1. */
@@ -89,6 +99,7 @@ export interface WorldParams {
   shape: ShapeParams
   erosion: ErosionParams
   render: RenderParams
+  avatar: AvatarParams
 }
 
 export function defaultParams(): WorldParams {
@@ -112,12 +123,15 @@ export function defaultParams(): WorldParams {
     ridges: {
       enabled: true,
       threshold: 0.55,
-      strength: 0.6,
+      // Softened from 0.6: full-strength ridges give knife-edge spines that
+      // are dramatic from orbit but miserable to actually move across.
+      strength: 0.4,
       octaves: 5,
       frequency: 3.0,
     },
     shape: {
-      redistribution: 1.35,
+      // Below the old 1.35 — less peak-sharpening, broader valley floors.
+      redistribution: 1.1,
       normalize: true,
       islandMask: true,
       falloffStart: 0.55,
@@ -147,12 +161,26 @@ export function defaultParams(): WorldParams {
       initialSpeed: 1,
     },
     render: {
-      cellSize: 1,
-      heightScale: 60,
+      // Relief is really the ratio of heightScale to the map's world width.
+      // At cellSize 1 / heightScale 60 a 256-cell map was 256 wide and 60 tall
+      // — about 23%, which is alpine, and unpleasant to traverse. Widening the
+      // cells and lowering the height puts it near 8%: still clearly hilly,
+      // but you can cross a valley without scaling a wall.
+      cellSize: 2,
+      heightScale: 42,
       sunAzimuth: 135,
       sunElevation: 32,
       wireframe: false,
       showWater: true,
+    },
+    avatar: {
+      enabled: true,
+      walkSpeed: 34,
+      flySpeed: 60,
+      hover: 0,
+      fly: false,
+      scale: 2.2,
+      followCamera: true,
     },
   }
 }
