@@ -260,6 +260,18 @@ function updateStatus(): void {
       : `seed ${params.seed}   ${params.mapSize}² → ${grid}²`,
   )
   parts.push(`${(terrain.triangleCount / 1000).toFixed(0)}k tris`)
+
+  // The world scale is derived from a traversal time, so show that time rather
+  // than making it something you have to trust or re-derive.
+  const worldWidth = params.mapSize * params.render.cellSize
+  const speed = params.avatar.fly ? params.avatar.flySpeed : params.avatar.walkSpeed
+  if (speed > 0) {
+    const secs = Math.round(worldWidth / speed)
+    const mm = Math.floor(secs / 60)
+    const ss = String(secs % 60).padStart(2, '0')
+    parts.push(`${worldWidth} across · ${mm}:${ss} to cross @ ${speed}/s`)
+  }
+
   parts.push(`gen ${stats.genMs.toFixed(0)} ms`)
   if (erosionBusy) {
     parts.push(
@@ -290,7 +302,10 @@ const gui = buildGui(params, {
   revert: revertErosion,
   preset: (p: ViewPreset) => rig.apply(p, params.camera),
   detailChanged: () => terrain.setDetail(params.render.detail),
-  avatarChanged: syncAvatarVisibility,
+  avatarChanged: () => {
+    syncAvatarVisibility()
+    updateStatus()
+  },
   recallAvatar: () => {
     settleAvatar(true)
     // Teleporting the avatar must not make the camera chase it across the map.

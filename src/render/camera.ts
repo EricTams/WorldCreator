@@ -230,19 +230,36 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
       appliedRadius = Number.NaN
     }
 
+    updateNearPlane()
     controls.update()
+  }
+
+  /**
+   * Scale the near plane to the current orbit distance.
+   *
+   * Depth precision is set by the near plane, and the useful zoom range now
+   * spans 15 units in the follow view to ~2000 in the overview — over two
+   * orders of magnitude. A near plane fixed for the far end throws away all
+   * the precision up close, and one fixed for the close end brings back the
+   * shoreline z-fighting at altitude. Tying it to the distance keeps the ratio
+   * roughly constant at every zoom, which is what actually matters.
+   */
+  function updateNearPlane(): void {
+    const radius = camera.position.distanceTo(controls.target)
+    const want = THREE.MathUtils.clamp(radius / 50, 0.05, extent / 300)
+    // Only respec when it has drifted materially — this runs every frame.
+    if (Math.abs(want - camera.near) > want * 0.15) {
+      camera.near = want
+      camera.updateProjectionMatrix()
+    }
   }
 
   function fitToWorld(newExtent: number, newHeightScale: number): void {
     extent = Math.max(newExtent, 1)
     heightScale = newHeightScale
-    // Depth precision is dominated by the near plane, and the shoreline is a
-    // guaranteed coplanar case: the water plane and the terrain surface meet
-    // exactly there. A near plane of extent/4000 left about 4cm of depth
-    // resolution at normal viewing distance, so the whole beach band z-fought
-    // and flickered as the camera moved. Keeping the ratio near 1:10000
-    // instead of 1:120000 gives roughly an order of magnitude more precision;
-    // nothing gets closer to the eye than this anyway.
+    // Starting value only — updateNearPlane() takes over per frame and tracks
+    // the orbit distance, since the shoreline is a guaranteed coplanar case
+    // and depth precision there is set almost entirely by the near plane.
     camera.near = Math.max(0.25, extent / 600)
     // Far enough to contain the sea plane, which the fog fades out long before.
     camera.far = extent * 16

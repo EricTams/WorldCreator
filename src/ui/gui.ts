@@ -140,8 +140,8 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   av.add(params.avatar, 'enabled').onChange(avatarChanged)
   av.add({ v: () => cb.recallAvatar() }, 'v').name('⌖ Recall to centre')
   av.add(params.avatar, 'fly').name('fly mode (Space / Shift)')
-  av.add(params.avatar, 'walkSpeed', 2, 150, 1).name('walk speed')
-  av.add(params.avatar, 'flySpeed', 5, 300, 1).name('fly speed')
+  av.add(params.avatar, 'walkSpeed', 2, 150, 1).name('walk speed').onChange(avatarChanged)
+  av.add(params.avatar, 'flySpeed', 5, 300, 1).name('fly speed').onChange(avatarChanged)
   av.add(params.avatar, 'scale', 0.5, 8, 0.1).onChange(avatarChanged)
   av.add(params.avatar, 'followCamera').name('camera follows').onChange(avatarChanged)
 

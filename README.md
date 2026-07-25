@@ -27,6 +27,25 @@ has gone after you orbit.
 The avatar carries a marker pole so you can find it from strategy altitude; it
 hides itself automatically once the camera is close enough to see the body.
 
+### Scale and speed
+
+The island is **2 km across** (256 cells × 8 units, reading 1 unit as 1 m) and
+top speed is **17 m/s**, so crossing it takes **two minutes**. The status bar
+shows that figure live, since the whole world scale was derived from it rather
+than picked.
+
+The scale follows from the traversal target, not the other way round. At the
+earlier 512-unit size, two minutes meant 4.3 m/s — under one body-length per
+second for a 5 m avatar, which is a crawl no matter how close the camera sits.
+Speed *perception* comes from how fast the ground crosses the frame, and the
+close follow distance (15) is what supplies it: top speed crosses a frame in
+under a second. But optical flow can't rescue a hundred-body-length island;
+the world itself had to grow.
+
+`heightScale` tracks that 4× scale-up (42 → 168) to hold the same ~8% relief.
+Slopes are unchanged — the hills are simply four times bigger, as a 2 km
+island's should be.
+
 ### Following the avatar
 
 The app opens in a close third-person view. The camera does **not** orbit the

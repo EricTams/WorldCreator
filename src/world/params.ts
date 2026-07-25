@@ -218,9 +218,12 @@ export function defaultParams(): WorldParams {
     },
     amplify: {
       enabled: true,
-      // 2 levels takes the default 256 simulation grid to a 1024 render grid
-      // (2.1M triangles). 3 is 8.4M and wants LOD first.
-      levels: 2,
+      // 3 levels: the 256 simulation grid renders at 2048, so a triangle is
+      // one world unit even though the island is now 2 km across. At 2 levels
+      // triangles are 2 m and the faceting shows at the close follow distance.
+      // Costs 8.4M triangles and ~185 MB of vertex buffers — drop to 2 if a
+      // machine can't hold that.
+      levels: 3,
       amplitude: 0.012,
       persistence: 0.55,
       frequencyScale: 0.16,
@@ -230,13 +233,18 @@ export function defaultParams(): WorldParams {
       flatFloor: 0.08,
     },
     render: {
-      // Relief is really the ratio of heightScale to the map's world width.
-      // At cellSize 1 / heightScale 60 a 256-cell map was 256 wide and 60 tall
-      // — about 23%, which is alpine, and unpleasant to traverse. Widening the
-      // cells and lowering the height puts it near 8%: still clearly hilly,
-      // but you can cross a valley without scaling a wall.
-      cellSize: 2,
-      heightScale: 42,
+      // The island is 2 km across (256 cells x 8 units, reading 1 unit as 1 m).
+      // Sized from the traversal target rather than picked: crossing in two
+      // minutes at a speed that reads as fast needs roughly this much world.
+      // At 512 units the same two minutes meant 4.3 m/s — under one
+      // body-length per second for a 5 m avatar, which is a crawl however
+      // close the camera sits.
+      cellSize: 8,
+      // Relief is the ratio of heightScale to world width, so this tracks the
+      // 4x scale-up to hold the same ~8% the terrain was tuned to. Slopes are
+      // unchanged; the hills are simply four times bigger, as a 2 km island's
+      // should be.
+      heightScale: 168,
       sunAzimuth: 135,
       sunElevation: 32,
       wireframe: false,
@@ -255,8 +263,11 @@ export function defaultParams(): WorldParams {
     },
     avatar: {
       enabled: true,
-      walkSpeed: 34,
-      flySpeed: 60,
+      // 2048 world units / 17 per second = 120 s to cross the island, which
+      // is the number this whole scale was derived from. Both modes run at
+      // top speed by default so the figure holds whichever you're in.
+      walkSpeed: 17,
+      flySpeed: 17,
       hover: 0,
       fly: false,
       scale: 2.2,
@@ -267,13 +278,20 @@ export function defaultParams(): WorldParams {
       recenterDelay: 2.5,
       recenterPitch: 45,
       recenterSpeed: 2.2,
-      followDistance: 22,
+      // Close enough that the ground rushes past: at 15 units the visible
+      // ground is about 15 across, so top speed crosses a frame in under a
+      // second. That optical flow is what makes it feel fast — the absolute
+      // speed on its own doesn't.
+      followDistance: 15,
       // 0.35s / 12 units let the avatar drift to almost half the frame width
       // when strafing, which at this distance put it behind the control panel.
       // Lateral movement is the binding case: moving north mostly adds depth,
       // but strafing turns trail directly into screen offset.
       followLag: 0.22,
-      followLeash: 7,
+      // Scaled down with the closer camera: trail is only meaningful as a
+      // fraction of the visible frame, and 7 at 15 units puts the avatar as
+      // far off-centre as 12 did at 22.
+      followLeash: 5,
       restoreDistance: true,
     },
   }
