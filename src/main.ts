@@ -226,11 +226,13 @@ function rebuildMesh(refit: boolean): void {
   }
   // The surface moved underneath it, so re-seat rather than leave it floating
   // or buried. Keeps its XZ unless the map size changed the world extent.
+  // Scale first: ride height is measured in body heights, so placing the
+  // avatar before its scale is applied seats it at the unscaled altitude.
+  syncAvatarVisibility()
   settleAvatar(refit)
   // A regenerate resets the avatar to the map centre, which is a teleport, not
   // movement — the camera should be there already rather than flying across.
   if (refit) rig.snapFollow()
-  syncAvatarVisibility()
 }
 
 /** Scene-level settings that don't require re-meshing. */
@@ -303,7 +305,9 @@ const gui = buildGui(params, {
   preset: (p: ViewPreset) => rig.apply(p, params.camera),
   detailChanged: () => terrain.setDetail(params.render.detail),
   avatarChanged: () => {
+    // Same ordering reason as in rebuildMesh: scale feeds ride height.
     syncAvatarVisibility()
+    settleAvatar(false)
     updateStatus()
   },
   recallAvatar: () => {

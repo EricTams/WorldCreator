@@ -114,6 +114,10 @@ export interface AvatarParams {
   enabled: boolean
   walkSpeed: number
   flySpeed: number
+  /**
+   * Ride height, in multiples of the avatar's own height rather than world
+   * units — so rescaling the avatar keeps it at the same apparent altitude.
+   */
   hover: number
   fly: boolean
   scale: number
@@ -268,9 +272,14 @@ export function defaultParams(): WorldParams {
       // top speed by default so the figure holds whichever you're in.
       walkSpeed: 17,
       flySpeed: 17,
-      hover: 0,
+      // In body heights, so this figure is unaffected by rescaling the avatar:
+      // shrinking the body shrinks the ride height with it, in proportion.
+      hover: 4,
       fly: false,
-      scale: 2.2,
+      // 1.66 local units tall, so this puts the figure at ~1.8 world units —
+      // person-sized against a 2 km island, and it carries the ride height
+      // down with it since hover is measured in body heights.
+      scale: 1.1,
       followCamera: true,
     },
     camera: {

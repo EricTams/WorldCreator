@@ -27,6 +27,14 @@ has gone after you orbit.
 The avatar carries a marker pole so you can find it from strategy altitude; it
 hides itself automatically once the camera is close enough to see the body.
 
+It rides a carpet at a hover height of **4 body heights**. That's deliberately
+expressed in multiples of the avatar's own height rather than world units, so
+rescaling the avatar carries the ride height with it in proportion instead of
+silently leaving it at the wrong altitude. The carpet conforms to the ground
+slope when it's near the ground and levels off as it lifts clear — a carpet
+hovering well above a hillside while still tilted to match it looks tethered to
+terrain it isn't touching.
+
 ### Scale and speed
 
 The island is **2 km across** (256 cells × 8 units, reading 1 unit as 1 m) and

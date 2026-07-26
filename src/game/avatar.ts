@@ -5,7 +5,7 @@ import type { Keyboard } from './input'
 export interface AvatarSettings {
   walkSpeed: number
   flySpeed: number
-  /** How far the avatar's feet sit above the terrain surface. */
+  /** Ride height above the terrain, in multiples of the avatar's height. */
   hover: number
   fly: boolean
   scale: number
@@ -39,6 +39,16 @@ export interface TerrainFrame {
  * what it exists for.
  */
 export class Avatar {
+  /**
+   * Local-space height of the figure, carpet to crown: the capsule is 1.44
+   * tall centred at 0.94, so it spans 0.22 to 1.66. The marker pole is a
+   * visibility affordance rather than part of the body, so it doesn't count.
+   *
+   * Hover is expressed in multiples of this, so it stays right if the avatar
+   * is rescaled instead of silently becoming the wrong altitude.
+   */
+  static readonly HEIGHT = 1.66
+
   readonly object = new THREE.Group()
   readonly position = new THREE.Vector3()
 
@@ -165,8 +175,18 @@ export class Avatar {
    * It's ~3 units long, so on any real slope a flat rug buries its uphill
    * corners and floats its downhill ones. The figure stays upright — people
    * stand vertically on hillsides — and only the rug conforms.
+   *
+   * The conforming fades out as it lifts off: once clear of the ground there's
+   * nothing to bury the corners in, and a carpet hovering well above a hillside
+   * while still tilted to match it looks tethered to terrain it isn't touching.
    */
-  private alignCarpet(frame: TerrainFrame): void {
+  private alignCarpet(frame: TerrainFrame, hoverHeights: number): void {
+    const conform = 1 - THREE.MathUtils.clamp(hoverHeights, 0, 1)
+    if (conform <= 0) {
+      this.carpet.rotation.x = 0
+      this.carpet.rotation.z = 0
+      return
+    }
     const { heightmap, cellSize, heightScale } = frame
     const cells = heightmap.size - 1
     const half = (cells * cellSize) / 2
@@ -188,8 +208,10 @@ export class Avatar {
     const localZ = dx * s + dz * c
 
     const LIMIT = 0.9 // ~50°, past which it looks like it's falling off
-    this.carpet.rotation.x = THREE.MathUtils.clamp(-Math.atan(localZ), -LIMIT, LIMIT)
-    this.carpet.rotation.z = THREE.MathUtils.clamp(Math.atan(localX), -LIMIT, LIMIT)
+    this.carpet.rotation.x =
+      THREE.MathUtils.clamp(-Math.atan(localZ), -LIMIT, LIMIT) * conform
+    this.carpet.rotation.z =
+      THREE.MathUtils.clamp(Math.atan(localX), -LIMIT, LIMIT) * conform
   }
 
   /** Travelling ripple, so the carpet looks like it's holding itself up. */
@@ -211,6 +233,16 @@ export class Avatar {
 
   setScale(s: number): void {
     this.object.scale.setScalar(s)
+  }
+
+  /** Height of the figure in world units, at its current scale. */
+  get worldHeight(): number {
+    return Avatar.HEIGHT * this.object.scale.x
+  }
+
+  /** Ride height in world units, from `hover` given in body heights. */
+  private hoverDistance(settings: AvatarSettings): number {
+    return settings.hover * this.worldHeight
   }
 
   /**
@@ -254,7 +286,7 @@ export class Avatar {
   placeAt(frame: TerrainFrame, worldX: number, worldZ: number, settings: AvatarSettings): void {
     const ground = Avatar.sampleTerrain(frame, worldX, worldZ)
     const sea = frame.seaLevel * frame.heightScale
-    this.position.set(worldX, Math.max(ground, sea) + settings.hover, worldZ)
+    this.position.set(worldX, Math.max(ground, sea) + this.hoverDistance(settings), worldZ)
     this.flyY = this.position.y
     this.syncObject()
   }
@@ -298,7 +330,7 @@ export class Avatar {
     const ground = Avatar.sampleTerrain(frame, this.position.x, this.position.z)
     const sea = frame.seaLevel * frame.heightScale
     // Standing at the waterline rather than walking along the seabed.
-    const floor = Math.max(ground, sea) + settings.hover
+    const floor = Math.max(ground, sea) + this.hoverDistance(settings)
 
     if (settings.fly) {
       this.flyY += lift * settings.flySpeed * dt
@@ -315,7 +347,7 @@ export class Avatar {
       this.carpet.rotation.x = 0
       this.carpet.rotation.z = 0
     } else {
-      this.alignCarpet(frame)
+      this.alignCarpet(frame, settings.hover)
     }
     this.syncObject()
     return moving || lift !== 0
