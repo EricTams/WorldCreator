@@ -46,13 +46,14 @@ The scale follows from the traversal target, not the other way round. At the
 earlier 512-unit size, two minutes meant 4.3 m/s — under one body-length per
 second for a 5 m avatar, which is a crawl no matter how close the camera sits.
 Speed *perception* comes from how fast the ground crosses the frame, and the
-close follow distance (15) is what supplies it: top speed crosses a frame in
-under a second. But optical flow can't rescue a hundred-body-length island;
-the world itself had to grow.
+follow distance is what supplies it — the visible ground is roughly the orbit
+distance across, so top speed crosses a frame in a couple of seconds. But
+optical flow can't rescue a hundred-body-length island; the world itself had
+to grow.
 
-`heightScale` tracks that 4× scale-up (42 → 168) to hold the same ~8% relief.
-Slopes are unchanged — the hills are simply four times bigger, as a 2 km
-island's should be.
+Relief is `heightScale` over world width: 101 / 2048 is just under 5%, a ~100 m
+high point on a 2 km island. Sea level is normalised and scales with it, so
+changing the height never moves the coastline.
 
 ### Following the avatar
 

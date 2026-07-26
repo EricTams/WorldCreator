@@ -244,11 +244,12 @@ export function defaultParams(): WorldParams {
       // body-length per second for a 5 m avatar, which is a crawl however
       // close the camera sits.
       cellSize: 8,
-      // Relief is the ratio of heightScale to world width, so this tracks the
-      // 4x scale-up to hold the same ~8% the terrain was tuned to. Slopes are
-      // unchanged; the hills are simply four times bigger, as a 2 km island's
-      // should be.
-      heightScale: 168,
+      // Relief is the ratio of heightScale to world width: 101 over 2048 is
+      // just under 5%, so a ~100 m high point on a 2 km island. Gentler than
+      // the 8% the terrain was first tuned to, which read as steep to fly
+      // across. Nothing else has to follow — sea level is normalised and
+      // scales with it, so the coastline doesn't move.
+      heightScale: 101,
       sunAzimuth: 135,
       sunElevation: 32,
       wireframe: false,
@@ -287,11 +288,10 @@ export function defaultParams(): WorldParams {
       recenterDelay: 2.5,
       recenterPitch: 45,
       recenterSpeed: 2.2,
-      // Close enough that the ground rushes past: at 15 units the visible
-      // ground is about 15 across, so top speed crosses a frame in under a
-      // second. That optical flow is what makes it feel fast — the absolute
-      // speed on its own doesn't.
-      followDistance: 15,
+      // The visible ground is roughly the orbit distance across, so top speed
+      // crosses a frame in a bit under two seconds. That optical flow is what
+      // makes movement feel fast — the absolute speed on its own doesn't.
+      followDistance: 30,
       // 0.35s / 12 units let the avatar drift to almost half the frame width
       // when strafing, which at this distance put it behind the control panel.
       // Lateral movement is the binding case: moving north mostly adds depth,

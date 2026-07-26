@@ -251,7 +251,10 @@ export class Avatar {
    * the camera is near enough that the body itself is clearly visible.
    */
   updateMarkerVisibility(camera: THREE.Camera): void {
-    const near = this.object.scale.x * 26
+    // Comfortably beyond the default follow distance, so the pole only turns
+    // up when you actually pull back to survey — at the normal riding
+    // distance it's a flagpole through the middle of the shot.
+    const near = this.object.scale.x * 60
     const show = camera.position.distanceToSquared(this.position) > near * near
     this.pole.visible = show
     this.flag.visible = show
