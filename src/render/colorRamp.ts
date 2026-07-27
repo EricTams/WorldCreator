@@ -1,26 +1,50 @@
 /**
- * Height + slope → vertex colour.
+ * Height + territory → vertex colour.
  *
- * Bands are positioned in "elevation above sea, normalised to the peak"
- * rather than raw height, so moving the sea level slider slides the whole
- * ecology up and down instead of drowning the palette.
+ * Bands are positioned in "elevation above sea, normalised to the peak" rather
+ * than raw height, so moving the sea level slider slides the whole coastline up
+ * and down instead of drowning the palette.
  *
- * The slope override is what makes erosion legible: carved channels and cliff
- * faces expose rock regardless of altitude, so drainage networks read as
- * structure rather than as noise in the green.
+ * Which palette a point is drawn from is a property of whose land it is; see
+ * `world/biome.ts`. Terrain decides only whether it is beach or not.
  */
+
+import type { BiomeRamp } from '../world/biome'
 
 export type RGB = readonly [number, number, number]
 
-/** Also used for the open-ocean floor plane, so the two must match exactly. */
+/** The bare seabed, shown only when the water is switched off. */
 export const DEEP_SILT: RGB = [0.09, 0.14, 0.19]
 const SHALLOW_BED: RGB = [0.36, 0.36, 0.28]
-const SAND: RGB = [0.76, 0.70, 0.50]
-const GRASS_LUSH: RGB = [0.24, 0.42, 0.20]
+
+/**
+ * The sea, in three depths, measured off the reference overworld sheet.
+ *
+ * sRGB (89,183,207), (76,155,217) and (55,92,191): a bright rim in the
+ * shallows, the open sea, and the deep. Linear here because everything else in
+ * this file is, and because the shader mixes them before anything converts.
+ *
+ * Three stops rather than two because two is a gradient and three is a coast —
+ * the rim is what makes a shoreline read as a shoreline from the overview.
+ */
+export const WATER_SHALLOW: RGB = [0.0999, 0.4735, 0.624]
+export const WATER_MID: RGB = [0.0723, 0.3278, 0.6939]
+export const WATER_DEEP: RGB = [0.0382, 0.107, 0.521]
+const SAND: RGB = [0.76, 0.7, 0.5]
+const GRASS_LUSH: RGB = [0.24, 0.42, 0.2]
 const GRASS_DRY: RGB = [0.42, 0.47, 0.24]
-const ROCK: RGB = [0.40, 0.38, 0.36]
-const ROCK_HIGH: RGB = [0.50, 0.48, 0.47]
+const ROCK: RGB = [0.4, 0.38, 0.36]
 const SNOW: RGB = [0.92, 0.94, 0.96]
+
+/** Used when territories are switched off, so the map still has an ecology. */
+export const DEFAULT_RAMP: BiomeRamp = {
+  shallow: SHALLOW_BED,
+  sand: SAND,
+  low: GRASS_LUSH,
+  mid: GRASS_DRY,
+  rock: ROCK,
+  peak: SNOW,
+}
 
 function mix(a: RGB, b: RGB, t: number, out: Float32Array, o: number): void {
   out[o] = a[0] + (b[0] - a[0]) * t
@@ -28,63 +52,57 @@ function mix(a: RGB, b: RGB, t: number, out: Float32Array, o: number): void {
   out[o + 2] = a[2] + (b[2] - a[2]) * t
 }
 
-function mixToward(target: RGB, t: number, out: Float32Array, o: number): void {
-  out[o] += (target[0] - out[o]) * t
-  out[o + 1] += (target[1] - out[o + 1]) * t
-  out[o + 2] += (target[2] - out[o + 2]) * t
-}
-
-function smoothstep(a: number, b: number, x: number): number {
-  if (a === b) return x < a ? 0 : 1
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
-  return t * t * (3 - 2 * t)
-}
-
-/** Inverse-lerp clamped to [0,1]. */
-function band(x: number, lo: number, hi: number): number {
-  return Math.min(1, Math.max(0, (x - lo) / (hi - lo)))
-}
-
 /**
- * @param slope 0 for flat ground, approaching 1 for a vertical face.
+ * A territory is one flat colour, all the way to the water.
+ *
+ * There were five elevation bands here — low, mid, rock, peak, and a
+ * slope-driven rock override — each blending into the next. Every one of them
+ * was a departure from the artist's fill colour, and together they were why the
+ * biomes never looked like the tilesets: on any real island most ground sits in
+ * the middle of the elevation range, so most of the map was painted as a blend
+ * of two invented colours rather than as the one measured colour it was meant to
+ * be. Widening the low band helped and did not fix it, because the bands above
+ * still owned every hill.
+ *
+ * The reference art settles it. Altitude does not tint the ground there at all —
+ * a mountain is a *sprite standing on flat colour*, and the map reads as terrain
+ * because of what is drawn on it, not because the ground is shaded. There is now
+ * one mountain sprite per biome, so the ground can stop trying to describe
+ * relief and simply be the tileset.
+ *
+ * The last two bands to go were the sand beach at the waterline and the seabed
+ * under it, and they went for the same reason as the rest, only more so: a band
+ * in *elevation* is a band of unpredictable width on the ground. Around the
+ * shallow inland lagoons a beach broad enough to see covered several hundred
+ * metres, so whole stretches were coming out cream instead of the colour of the
+ * biome that owned them. The coast is drawn by `shelfHeight` now — a step in the
+ * ground rather than a stripe of paint, which is a fixed width on screen
+ * wherever it happens to be.
+ *
+ * The seabed went with it. There is nothing left for it to do: the sea is opaque
+ * from the waterline out (see `terrainMaterial.ts`), so the only thing a special
+ * underwater colour could still reach was a stray fringe of khaki showing
+ * through where the two disagreed by a pixel. Territory colour simply carries on
+ * under the water.
+ *
+ * So height does not enter into it at all any more, and neither does slope —
+ * hence neither is a parameter. `sand`, `shallow`, `mid`, `rock` and `peak` are
+ * consequently unread. They stay on `BiomeRamp` because deleting hand-tuned
+ * colours is a decision to take deliberately rather than as a side effect of
+ * this one.
+ *
+ * @param biomeB the neighbouring territory, and `t` how far between the two this
+ *   point sits. Pass t = 0 to ignore.
  */
 export function writeTerrainColor(
   out: Float32Array,
   offset: number,
-  height: number,
-  slope: number,
-  seaLevel: number,
+  biomeA: BiomeRamp | null = null,
+  biomeB: BiomeRamp | null = null,
+  t = 0,
 ): void {
-  if (height < seaLevel) {
-    // Underwater bed: shallows sandy, depths silty. Sits beneath the
-    // translucent water plane, so it only needs to read as "not land".
-    const depth = seaLevel > 0 ? (seaLevel - height) / seaLevel : 0
-    mix(SHALLOW_BED, DEEP_SILT, smoothstep(0.05, 0.7, depth), out, offset)
-    return
-  }
+  const ramp = biomeA ?? DEFAULT_RAMP
 
-  const e = (height - seaLevel) / Math.max(1e-5, 1 - seaLevel)
-
-  // Bands are weighted towards green: after range normalisation a lot of the
-  // island sits in the upper half of the elevation range, and evenly spaced
-  // bands turn almost the whole map to bare rock.
-  if (e < 0.03) {
-    // Beach
-    mix(SAND, GRASS_LUSH, band(e, 0.015, 0.03), out, offset)
-  } else if (e < 0.55) {
-    mix(GRASS_LUSH, GRASS_DRY, band(e, 0.03, 0.55), out, offset)
-  } else if (e < 0.78) {
-    mix(GRASS_DRY, ROCK, band(e, 0.55, 0.78), out, offset)
-  } else if (e < 0.92) {
-    mix(ROCK, ROCK_HIGH, band(e, 0.78, 0.92), out, offset)
-  } else {
-    mix(ROCK_HIGH, SNOW, band(e, 0.92, 0.98), out, offset)
-  }
-
-  // Steep faces shed soil and snow alike — expose rock. Applied last so it
-  // overrides every band above.
-  const rockiness = smoothstep(0.45, 0.78, slope)
-  if (rockiness > 0) {
-    mixToward(e > 0.8 ? ROCK_HIGH : ROCK, rockiness, out, offset)
-  }
+  // Cross-fade at a territory border.
+  mix(ramp.low, biomeB && t > 0 ? biomeB.low : ramp.low, t, out, offset)
 }

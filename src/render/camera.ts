@@ -46,6 +46,8 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   let extent = 256
   let heightScale = 60
   let followTarget: THREE.Vector3 | null = null
+  /** Last thing worth framing, kept even when following is off. See `follow`. */
+  let frameTarget: THREE.Vector3 | null = null
   // The camera orbits `pivot`, a damped point chasing the avatar — not the
   // avatar itself. That trailing is the whole point: locked rigidly, movement
   // reads as the world sliding past a fixed rig rather than the avatar moving.
@@ -70,6 +72,8 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   // presets leave it at 0 so that deliberately pulling back to look at the
   // whole map is never undone two seconds later.
   let restingDistance = 0
+  /** Tri-state: null until the first tick applies the param either way. */
+  let northLocked: boolean | null = null
 
   controls.addEventListener('start', () => {
     dragging = true
@@ -81,6 +85,31 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   function readOrbit(): void {
     offset.subVectors(camera.position, controls.target)
     spherical.setFromVector3(offset)
+  }
+
+  /**
+   * Clamp the orbit's azimuth to zero, so the camera can only ever sit due
+   * south and north stays up the screen.
+   *
+   * Done through OrbitControls' own limits rather than by overwriting theta
+   * after the fact: the limits are applied inside its damping loop, so a drag
+   * simply has no yaw component instead of being visibly snapped back.
+   */
+  function applyNorthLock(on: boolean): void {
+    if (on === northLocked) return
+    northLocked = on
+    if (on) {
+      controls.minAzimuthAngle = 0
+      controls.maxAzimuthAngle = 0
+      // Whatever yaw the view already had has to go somewhere; put it back to
+      // north immediately rather than leaving the camera outside its own limits.
+      readOrbit()
+      spherical.theta = 0
+      writeOrbit()
+    } else {
+      controls.minAzimuthAngle = -Infinity
+      controls.maxAzimuthAngle = Infinity
+    }
   }
 
   function writeOrbit(): void {
@@ -110,6 +139,10 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
 
   function follow(target: THREE.Vector3 | null): void {
     followTarget = target
+    // Remembered even after following is switched off, so the follow *framing*
+    // can still be pointed at the avatar. It's the same live Vector3, so it
+    // stays current as the avatar moves.
+    if (target) frameTarget = target
     if (!target) {
       pivotReady = false
       return
@@ -125,6 +158,8 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
   }
 
   function tick(dt: number, cam: CameraParams): void {
+    applyNorthLock(cam.lockNorth)
+
     if (followTarget) {
       if (cam.followLag > 0.001) {
         // Frame-rate independent exponential chase.
@@ -277,24 +312,51 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
 
   const presetTarget = new THREE.Vector3()
 
+  /**
+   * Snap to one of the framings.
+   *
+   * Written as an exhaustive switch rather than an if/else chain on purpose:
+   * the chain this replaced ended in a bare `else` for the deck view, so asking
+   * for 'follow' with nothing to follow silently landed you at deck level
+   * looking out to sea — a wrong view rather than no view, which is much harder
+   * to diagnose from the outside.
+   */
   function apply(preset: ViewPreset, cam?: CameraParams): void {
-    if (preset === 'follow' && followTarget) {
-      snapFollow()
-      restingDistance = cam?.followDistance ?? 22
-      orbitTo(followTarget, restingDistance, cam?.recenterPitch ?? 45)
-      lastPivot.copy(pivot)
-    } else if (preset === 'populous') {
-      // High and wide, whole island framed — the strategy view.
-      restingDistance = 0
-      presetTarget.set(0, heightScale * 0.18, 0)
-      orbitTo(presetTarget, extent * 1.05, 38)
-    } else {
-      // Down at the deck, looking out across the terrain.
-      restingDistance = 0
-      presetTarget.set(0, heightScale * 0.3, 0)
-      orbitTo(presetTarget, extent * 0.2, 12)
+    switch (preset) {
+      case 'follow': {
+        // `frameTarget` outlives `followTarget`, so the follow framing still
+        // points at the avatar when camera-follow has been switched off.
+        const target = followTarget ?? frameTarget
+        if (!target) {
+          // Nothing to frame. The overview is the honest fallback; the deck
+          // view is not.
+          applyOverview()
+          break
+        }
+        snapFollow()
+        restingDistance = cam?.followDistance ?? 22
+        orbitTo(target, restingDistance, cam?.recenterPitch ?? 45)
+        lastPivot.copy(pivot)
+        break
+      }
+      case 'populous':
+        applyOverview()
+        break
+      case 'magicCarpet':
+        // Down at the deck, looking out across the terrain.
+        restingDistance = 0
+        presetTarget.set(0, heightScale * 0.3, 0)
+        orbitTo(presetTarget, extent * 0.2, 12)
+        break
     }
     controls.update()
+  }
+
+  /** High and wide, whole island framed — the strategy view. */
+  function applyOverview(): void {
+    restingDistance = 0
+    presetTarget.set(0, heightScale * 0.18, 0)
+    orbitTo(presetTarget, extent * 1.05, 38)
   }
 
   function resize(aspect: number): void {

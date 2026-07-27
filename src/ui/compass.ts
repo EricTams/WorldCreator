@@ -25,7 +25,7 @@ export class Compass {
         <div class="compass-label compass-s">S</div>
         <div class="compass-label compass-w">W</div>
       </div>
-      <div class="compass-keys">WASD</div>
+      <div class="compass-keys">WASD · C resets view</div>
     `
     parent.appendChild(this.element)
     this.rose = this.element.querySelector('.compass-rose') as HTMLElement

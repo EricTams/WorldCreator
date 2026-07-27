@@ -5,9 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "play": "vite --open",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pack-sprites": "node tools/packSprites.mjs",
+    "pack-ground": "node tools/packGround.mjs",
+    "survey-art": "node tools/surveyArt.mjs",
+    "audit-biomes": "rolldown tools/biomeAudit.ts -o node_modules/.cache/biomeAudit.mjs --platform node --format esm && node node_modules/.cache/biomeAudit.mjs"
   },
   "dependencies": {
     "lil-gui": "^0.21.0",

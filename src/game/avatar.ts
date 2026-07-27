@@ -1,6 +1,10 @@
 import * as THREE from 'three'
-import { Heightmap, sampleHeightAndGradient } from '../world/heightmap'
+import { sampleHeightAndGradient } from '../world/heightmap'
+import { terrainRawHeightAt } from '../world/terrainQuery'
+import type { TerrainFrame } from '../world/terrainQuery'
 import type { Keyboard } from './input'
+
+export type { TerrainFrame }
 
 export interface AvatarSettings {
   walkSpeed: number
@@ -21,13 +25,6 @@ export const NORTH = new THREE.Vector3(0, 0, -1)
 /** Compass bearing of a world-space direction, in radians clockwise from north. */
 export function bearingFromNorth(x: number, z: number): number {
   return Math.atan2(x, -z)
-}
-
-export interface TerrainFrame {
-  heightmap: Heightmap
-  cellSize: number
-  heightScale: number
-  seaLevel: number
 }
 
 /**
@@ -53,7 +50,6 @@ export class Avatar {
   readonly position = new THREE.Vector3()
 
   private facing = 0
-  private flyY = 0
   private body: THREE.Mesh
   private nose: THREE.Mesh
   private pole: THREE.Mesh
@@ -260,29 +256,19 @@ export class Avatar {
     this.flag.visible = show
   }
 
-  /** Terrain height in world units at a world-space XZ, plus whether in bounds. */
-  static sampleTerrain(
-    frame: TerrainFrame,
-    worldX: number,
-    worldZ: number,
-  ): number {
-    const { heightmap, cellSize, heightScale } = frame
-    const cells = heightmap.size - 1
-    const half = (cells * cellSize) / 2
-
-    // World space is centred on the origin; grid space starts at 0.
-    let gx = (worldX + half) / cellSize
-    let gz = (worldZ + half) / cellSize
-
-    // The bilinear sampler reads (floor+1), so stay inside the last cell.
-    const max = cells - 1.001
-    gx = gx < 0 ? 0 : gx > max ? max : gx
-    gz = gz < 0 ? 0 : gz > max ? max : gz
-
-    return (
-      sampleHeightAndGradient(heightmap.data, heightmap.size, gx, gz).height *
-      heightScale
-    )
+  /**
+   * The height the avatar rides above, in world units at a world-space XZ.
+   *
+   * Kept as an alias so existing call sites and the dev console keep working;
+   * the implementation lives in world/terrainQuery.ts now that map sites and
+   * fog need the same query.
+   *
+   * The *raw* field, for the reason given in `update` — and it has to be this
+   * one rather than the shelved surface, or seating and walking would disagree
+   * and re-placing the avatar would drop it a step on the next frame.
+   */
+  static sampleTerrain(frame: TerrainFrame, worldX: number, worldZ: number): number {
+    return terrainRawHeightAt(frame, worldX, worldZ)
   }
 
   /** Drop the avatar onto the surface at a world XZ, e.g. after regenerating. */
@@ -290,7 +276,6 @@ export class Avatar {
     const ground = Avatar.sampleTerrain(frame, worldX, worldZ)
     const sea = frame.seaLevel * frame.heightScale
     this.position.set(worldX, Math.max(ground, sea) + this.hoverDistance(settings), worldZ)
-    this.flyY = this.position.y
     this.syncObject()
   }
 
@@ -311,7 +296,6 @@ export class Avatar {
   ): boolean {
     const east = keys.axis('KeyA', 'KeyD')
     const north = keys.axis('KeyS', 'KeyW')
-    const lift = settings.fly ? keys.axis('ShiftLeft', 'Space') : 0
 
     // North is -Z, east is +X.
     this.move.set(east, 0, -north)
@@ -330,19 +314,26 @@ export class Avatar {
     this.position.x = THREE.MathUtils.clamp(this.position.x, -half, half)
     this.position.z = THREE.MathUtils.clamp(this.position.z, -half, half)
 
+    // The heightmap as generated, deliberately not the shelved surface that
+    // gets drawn. The shelf is a step — a metre either side of the waterline it
+    // is worth +3 on the land side and -3 on the water side — so riding it
+    // drops the avatar 3 metres between one footfall and the next, on ground
+    // whose real height changed by centimetres. Measured at one shoreline: raw
+    // went 32.18 -> 32.62 while the shelved value went 29.27 -> 35.42.
+    //
+    // Nothing is lost by ignoring it. The ride height is more than twice the
+    // step, so the avatar still clears the bank it is drawn standing on; the
+    // props do use the shelved height, because they are planted in the surface
+    // rather than hovering over it.
     const ground = Avatar.sampleTerrain(frame, this.position.x, this.position.z)
     const sea = frame.seaLevel * frame.heightScale
-    // Standing at the waterline rather than walking along the seabed.
-    const floor = Math.max(ground, sea) + this.hoverDistance(settings)
-
-    if (settings.fly) {
-      this.flyY += lift * settings.flySpeed * dt
-      this.position.y = Math.max(this.flyY, floor)
-      this.flyY = this.position.y
-    } else {
-      this.position.y = floor
-      this.flyY = floor
-    }
+    /**
+     * The avatar rides a fixed distance above the ground or the waterline,
+     * whichever is higher — walking and flying alike. There is no second
+     * altitude anywhere: this expression is the avatar's Y, and nothing else
+     * writes it.
+     */
+    this.position.y = Math.max(ground, sea) + this.hoverDistance(settings)
 
     this.rippleCarpet(dt)
     // Flying free of the ground, so nothing to conform to.
@@ -353,7 +344,7 @@ export class Avatar {
       this.alignCarpet(frame, settings.hover)
     }
     this.syncObject()
-    return moving || lift !== 0
+    return moving
   }
 
   private syncObject(): void {

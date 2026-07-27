@@ -68,6 +68,59 @@ export interface ErosionParams {
   initialSpeed: number
 }
 
+/** The biome ground tiles lifted from the overworld tilesets. */
+export interface GroundParams {
+  enabled: boolean
+  /**
+   * Take the tile scale from the sprite cards instead of `scale`, so one ground
+   * texel covers exactly one sprite pixel.
+   *
+   * Both are "world units per 16 source pixels", so matching them is just
+   * assignment — but they are authored in different files and drifted apart
+   * immediately when they were independent, leaving the ground three times
+   * coarser than the props standing on it.
+   */
+  matchPropScale: boolean
+  /** World units per repeat of the 16px tile, when not matching the props. */
+  scale: number
+  /** How strongly it modulates the elevation banding, 0..1. */
+  strength: number
+  /** Fully textured within this distance; flat biome colour beyond fadeFar. */
+  fadeNear: number
+  fadeFar: number
+  /**
+   * Fraction of the ground covered by the textured alternate, 0..1, laid in
+   * soft blobs over the flat fill.
+   *
+   * Honest by construction: the blob noise is near-normal with mean 0.5 and
+   * sd 0.158, and the shader maps this onto that measured span, so 0.5 really
+   * does cover about half.
+   */
+  density: number
+  /**
+   * How strongly the alternate's grain shows where it is laid, 0..1.
+   *
+   * Each biome sheet carries two ground surfaces: a flat fill and, directly
+   * beneath it, a textured alternate in the same palette. Together with
+   * `density` this is what stops a territory reading as one flat colour.
+   */
+  baseStrength: number
+  /**
+   * World units either side of a territory border kept as flat fill, with no
+   * textured patch laid over it.
+   *
+   * A border reads as a border when two flat colours meet along it. Let the
+   * grain run up to the edge from both sides and the eye has no line to find —
+   * the two territories fray into each other instead of meeting. This is also
+   * what gives the colour cross-fade (`biome.blend`) clean ground to happen on.
+   */
+  borderSolid: number
+  /** Draw the terrain as flat albedo, ignoring every light in the scene. */
+  unshaded: boolean
+  /** Draw the biome's actual tile texels, not a colour derived from them. */
+  exact: boolean
+}
+
 export interface DetailParams {
   enabled: boolean
   /** World units per repeat of the fine grain. */
@@ -98,6 +151,9 @@ export interface AmplifyParams {
   flatFloor: number
 }
 
+import type { BiomeParams } from './biome'
+import type { FogParams } from './fog'
+
 export interface RenderParams {
   /** World units per grid cell. */
   cellSize: number
@@ -107,6 +163,46 @@ export interface RenderParams {
   sunElevation: number
   wireframe: boolean
   showWater: boolean
+  /**
+   * World units of water depth spanned by the bright coastal rim, before the
+   * sea settles into its open-water blue.
+   *
+   * Purely a look, and note that it does not soften the waterline: the water is
+   * opaque right up to the edge, and the coast holds together because the sea
+   * is part of the terrain surface — see `render/terrainMaterial.ts`.
+   */
+  shoreFade: number
+  /**
+   * World units the ground steps up on the land side of the waterline, and down
+   * on the water side. See `shelfHeight` in `world/terrainQuery.ts`.
+   *
+   * This is what draws the coastline, now that nothing paints it. Zero gives
+   * back the old behaviour: territory colour running straight into the sea with
+   * no edge of its own, which on flat ground is barely a coast at all.
+   */
+  coastStep: number
+  /**
+   * World units of *elevation* either side of the waterline over which the step
+   * eases back to the terrain's own height.
+   *
+   * Elevation, not distance along the ground — so on a flat shore the lip runs
+   * a long way inland. That is harmless where a colour band was not: lifting a
+   * wide area by a near-constant amount is invisible, whereas painting it was
+   * the whole problem.
+   */
+  coastBand: number
+  /** Dress the whole island with biome-appropriate props, not just the sites. */
+  scatter: boolean
+  /** World units between scatter candidates. Lower is denser and costlier. */
+  scatterSpacing: number
+  /** World units across a typical stand of vegetation. */
+  scatterBlob: number
+  /**
+   * Saturation applied after tone mapping. 1 leaves the tone-mapped result
+   * alone. See terrainMaterial.ts.
+   */
+  saturation: number
+  ground: GroundParams
   detail: DetailParams
 }
 
@@ -125,6 +221,20 @@ export interface AvatarParams {
 }
 
 export interface CameraParams {
+  /**
+   * Pin the view to north-up: orbiting the yaw is disabled entirely, and the
+   * camera always sits due south of its target.
+   *
+   * This is a genre decision rather than a convenience. A fixed compass makes
+   * the map's geography stable — a place stays north-east of another place, and
+   * you learn the island's shape rather than re-reading it from every angle,
+   * which is how the strategy games this is aiming at behave. It also lets the
+   * sprite cards face a known direction instead of swivelling to track the
+   * camera, so they read as standing scenery rather than as billboards.
+   *
+   * Pitch and zoom are still free.
+   */
+  lockNorth: boolean
   /** Drift back to north-up at a fixed pitch once rotation stops. */
   autoRecenter: boolean
   /** Seconds of no rotation before the drift begins. */
@@ -149,6 +259,8 @@ export interface CameraParams {
 
 export interface WorldParams {
   seed: string
+  biome: BiomeParams
+  fog: FogParams
   /** Cells per side. Vertices per side is this + 1. */
   mapSize: number
   noise: NoiseParams
@@ -168,6 +280,42 @@ export function defaultParams(): WorldParams {
     // 256 by default rather than 512: generation plus remeshing stays under a
     // frame, so dragging a slider updates live. 512 is one dropdown away.
     mapSize: 256,
+    biome: {
+      enabled: true,
+      // Capitals, not territories — there are more cities than factions, so a
+      // faction holds several and its territory is however many of those cells
+      // happen to adjoin. Fifteen on a 2 km island puts one within about a
+      // twenty-second ride of anywhere, which is what makes the map feel settled
+      // rather than like six castles in a wilderness.
+      cities: 15,
+      // A border, not a gradient. The tile art this is matching changes biome
+      // from one tile to the next, so the transition wants to be about as wide
+      // as the terrain grid can express and no wider — at the default 2 km / 256
+      // that is 8 m a cell, and `blend` is in distance-difference units worth
+      // about half that on the ground (see `sampleBiomeAt`). 16 therefore fades
+      // over roughly one cell: crisp, but not stair-stepped along the grid.
+      //
+      // This was 260, which faded over a third of a territory's width and turned
+      // the whole map into one continuous wash. Fifteen territories were being
+      // generated and none of them had an interior that was unambiguously its
+      // own colour.
+      blend: 16,
+      // Roughly a tenth of the island, so borders wander noticeably without
+      // detaching from the seed that owns them.
+      warp: 180,
+    },
+    fog: {
+      enabled: true,
+      revealAll: false,
+      // 180 m of sight on a 2 km island: a straight crossing sweeps a 360 m
+      // corridor, so learning the whole map is several deliberate journeys
+      // rather than one lap. It is also far wider than the follow camera's
+      // view, so you never ride into a wall of fog at ground level.
+      sightRadius: 180,
+      elevationBonus: 0.8,
+      siteRadius: 150,
+      updateHz: 6,
+    },
     noise: {
       enabled: true,
       octaves: 6,
@@ -254,6 +402,68 @@ export function defaultParams(): WorldParams {
       sunElevation: 32,
       wireframe: false,
       showWater: true,
+      // About 5 % of the height range, so the fade covers the shallow band where
+      // seabed and sea surface are within a depth quantum of each other while
+      // staying narrow enough to still read as a coastline.
+      // Wider than it was, because the shelf drops the seabed at the water's
+      // edge — the rim has to span that drop or the coast starts at open-sea
+      // blue and the bright shallow tone is never seen at all.
+      shoreFade: 10,
+      coastStep: 3,
+      coastBand: 9,
+      scatter: true,
+      // A 2 m lattice, halved again by the diagonal checkerboard.
+      //
+      // Ground cover depends on the *ratio* of prop width to spacing, not on
+      // either alone — measured, it runs at about 0.18 x (tree / spacing)^2. So
+      // when the sprites halved, this halved with them: 2.34 over 2 is the same
+      // 1.17 ratio 4.7 over 4 was, and the island looks equally wooded, just at
+      // finer grain. The cost is four times the props, which is why the card
+      // capacity is what it is.
+      scatterSpacing: 2,
+      // Stands roughly 170 m across — big enough to ride into and out of, small
+      // enough that a territory holds several.
+      scatterBlob: 170,
+      // 1, not the boost first guessed at. Measured: once the ramps were
+      // authored in the art's own colours, the rendered meadow came out at
+      // saturation 0.68 against the source art's 0.73 — the washout was the
+      // muted hand-picked palette, not the tone mapping. Pushing to 1.45 on top
+      // drove whole channels to 0 and 255; the slider stays for taste.
+      saturation: 1,
+      ground: {
+        enabled: true,
+        matchPropScale: true,
+        // Only consulted when matchPropScale is off.
+        scale: 3,
+        // Modulate, don't replace — elevation banding and the slope rock
+        // override still have to show through. 0.5 was too timid to read: the
+        // blobs were there and measurable but invisible at the follow camera.
+        strength: 0.85,
+        // Texture near, flat colour far. A 16px tile smaller than a pixel is
+        // crawling static, and the overview wants readable colour anyway.
+        fadeNear: 140,
+        fadeFar: 460,
+        // Each biome sheet carries two ground surfaces — a flat fill and a
+        // textured alternate in the same palette. A third of the ground takes
+        // the alternate, in soft blobs, so a territory reads as varied without
+        // losing the flat colour that makes it identifiable.
+        //
+        // Down from 0.5, and now honoured by both ground paths. The `exact`
+        // path ignored blobs entirely and laid the tileset over every square
+        // metre, which is what made the whole island read as grain rather than
+        // as flat territories with texture in them.
+        density: 0.33,
+        baseStrength: 0.85,
+        // Two flat colours meeting is what makes a border read as a line. A
+        // patch of grain running up to the edge frays it, so the ground is held
+        // flat for this many world units either side — a little over three
+        // terrain cells, and wide enough to contain the colour cross-fade
+        // (`biome.blend`) with room to spare.
+        borderSolid: 26,
+        /** Draw the terrain as flat albedo, with no lighting. */
+        unshaded: false,
+        exact: true,
+      },
       detail: {
         enabled: true,
         // Tuned against an avatar roughly 5 world units tall: the fine grain
@@ -284,6 +494,7 @@ export function defaultParams(): WorldParams {
       followCamera: true,
     },
     camera: {
+      lockNorth: true,
       autoRecenter: true,
       recenterDelay: 2.5,
       recenterPitch: 45,

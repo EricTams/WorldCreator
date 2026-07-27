@@ -4,6 +4,14 @@
  */
 export class Keyboard {
   private held = new Set<string>()
+  /**
+   * Keys that went down this frame and haven't been acted on yet.
+   *
+   * Separate from `held` because one-shot actions want the *edge*, not the
+   * state: holding C should reset the view once, not on every frame for as long
+   * as your finger is down.
+   */
+  private pressed = new Set<string>()
   private onKeyDown: (e: KeyboardEvent) => void
   private onKeyUp: (e: KeyboardEvent) => void
   private onBlur: () => void
@@ -12,7 +20,6 @@ export class Keyboard {
   private static readonly SWALLOW = new Set([
     'KeyW', 'KeyA', 'KeyS', 'KeyD',
     'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-    'Space',
   ])
 
   constructor() {
@@ -21,13 +28,22 @@ export class Keyboard {
       // typing "was" in there must not drive the avatar across the map.
       if (Keyboard.isTypingTarget(document.activeElement)) return
       this.held.add(e.code)
+      // `repeat` filters the auto-repeat stream, and the modifier check keeps
+      // browser shortcuts out: Cmd+C is copy, and it must not also be a game
+      // binding just because the C key was involved.
+      if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        this.pressed.add(e.code)
+      }
       if (Keyboard.SWALLOW.has(e.code)) e.preventDefault()
     }
     this.onKeyUp = (e) => {
       this.held.delete(e.code)
     }
     // Losing focus mid-keypress otherwise leaves the key stuck down forever.
-    this.onBlur = () => this.held.clear()
+    this.onBlur = () => {
+      this.held.clear()
+      this.pressed.clear()
+    }
 
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('keyup', this.onKeyUp)
@@ -49,10 +65,25 @@ export class Keyboard {
     return (this.isDown(pos) ? 1 : 0) - (this.isDown(neg) ? 1 : 0)
   }
 
+  /** True once per physical press of `code`, then false until it's pressed again. */
+  consumePress(code: string): boolean {
+    return this.pressed.delete(code)
+  }
+
+  /**
+   * Drop any presses nobody claimed. Call once per frame, after every
+   * `consumePress`, so an unbound key can't sit in the set and fire the day
+   * someone binds it.
+   */
+  endFrame(): void {
+    if (this.pressed.size > 0) this.pressed.clear()
+  }
+
   dispose(): void {
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('keyup', this.onKeyUp)
     window.removeEventListener('blur', this.onBlur)
     this.held.clear()
+    this.pressed.clear()
   }
 }

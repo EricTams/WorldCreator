@@ -1,14 +1,20 @@
 import * as THREE from 'three'
-import { DEEP_SILT } from './colorRamp'
+import { DEEP_SILT, WATER_DEEP } from './colorRamp'
 
 export interface SceneBundle {
   renderer: THREE.WebGLRenderer
   scene: THREE.Scene
   sun: THREE.DirectionalLight
-  water: THREE.Mesh
-  waterMaterial: THREE.MeshStandardMaterial
   setEnvironment(seaLevel: number, heightScale: number, extent: number): void
   setSun(azimuthDeg: number, elevationDeg: number, extent: number): void
+  /**
+   * Match the open sea to the sea the terrain paints on itself.
+   *
+   * `fogged` has to track the terrain material's own fog flag, which "exact
+   * tile pixels" turns off — a fogged ocean meeting an unfogged one draws the
+   * terrain's square edge across the water in plain sight.
+   */
+  setOcean(water: boolean, fogged: boolean): void
   resize(width: number, height: number): void
 }
 
@@ -19,8 +25,14 @@ export function createScene(canvasParent: HTMLElement): SceneBundle {
   })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.05
+  // No tone mapping, deliberately. ACES is a film curve: it rolls off highlights
+  // and desaturates as it does, which is what you want for a rendered scene and
+  // exactly what you do not want for pixel art. The terrain is coloured with
+  // values lifted straight out of the artist's tilesets, and a filmic curve
+  // turns those into pastels — a saturated tileset green measured on screen came
+  // back visibly greyer than the sprites standing on it. Off, a sampled colour
+  // survives to the framebuffer as the colour it was sampled as.
+  renderer.toneMapping = THREE.NoToneMapping
   canvasParent.appendChild(renderer.domElement)
 
   const SKY = 0x8fb8d8
@@ -34,75 +46,79 @@ export function createScene(canvasParent: HTMLElement): SceneBundle {
   // A low sun rakes across the terrain and makes relief legible — a high sun
   // flattens everything out. Also the condition under which normal seams would
   // be most visible, which is exactly when you want to be looking.
-  const sun = new THREE.DirectionalLight(0xfff3e0, 2.6)
+  // Flat-ish lighting, for the same reason there is no tone curve. The source
+  // art has no lighting model at all — a tile is one colour — so the more of the
+  // final pixel is shading, the less of it is the artist's palette. A low sun
+  // and a strong sky term keep enough directional cue to read the relief while
+  // leaving the flat ground close to the colour it was authored as.
+  const sun = new THREE.DirectionalLight(0xfff3e0, 1.15)
   scene.add(sun)
   scene.add(sun.target)
 
   // Sky/ground fill so shadowed slopes pick up bounce rather than going black.
-  const hemi = new THREE.HemisphereLight(0xbcd8f0, 0x4a4033, 0.55)
+  const hemi = new THREE.HemisphereLight(0xbcd8f0, 0x8a8478, 1.5)
   scene.add(hemi)
 
-  // Open-ocean floor. The island mask drives the terrain's border down to
-  // height 0, so without this the terrain's square edge is plainly visible:
-  // inside it the translucent water composites over dark seabed, outside it
-  // over bright sky. This plane continues the seabed to the horizon at the
-  // same depth and colour, which makes the boundary vanish.
-  const floorMaterial = new THREE.MeshStandardMaterial({
+  // The open sea, past the terrain's square edge.
+  //
+  // The terrain draws its own water (see terrainMaterial.ts) but the terrain is
+  // 2 km of it and the horizon is not — without this the map ends in a visible
+  // square with sky beyond. The island mask drives the border down to height 0,
+  // which is the sea's deepest colour, so continuing that one colour outwards
+  // makes the boundary disappear.
+  //
+  // Basic, not standard: the terrain paints its sea unlit, and a lit plane
+  // butted against an unlit one is exactly the seam this is here to avoid.
+  const oceanMaterial = new THREE.MeshBasicMaterial({
     // Vertex colours are authored in the linear working space, so the plane's
     // colour has to be specified the same way or it won't match the terrain.
-    color: new THREE.Color().setRGB(
-      DEEP_SILT[0],
-      DEEP_SILT[1],
-      DEEP_SILT[2],
-      THREE.LinearSRGBColorSpace,
-    ),
-    roughness: 0.95,
-    metalness: 0.0,
-  })
-  const oceanFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), floorMaterial)
-  oceanFloor.rotation.x = -Math.PI / 2
-  scene.add(oceanFloor)
-
-  const waterMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2f6f9e,
-    transparent: true,
-    opacity: 0.72,
-    roughness: 0.12,
-    metalness: 0.15,
+    color: new THREE.Color(),
+    // Free orbit can put the eye under the waterline out over open water, and a
+    // single-sided sea shows sky from below.
     side: THREE.DoubleSide,
-    // At the shoreline the water plane and the terrain are exactly coplanar,
-    // which no amount of depth precision resolves — the comparison is a coin
-    // flip per pixel per frame, which is the flicker. A small negative offset
-    // biases water consistently towards the eye so it always wins there, and
-    // "water laps over the last centimetre of beach" is the right answer
-    // visually as well as the stable one.
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -2,
-    // Transparent surfaces should not write depth; the sea is a single plane
-    // so nothing needs to depth-test against it.
-    depthWrite: false,
   })
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), waterMaterial)
-  water.rotation.x = -Math.PI / 2
-  water.renderOrder = 1
-  scene.add(water)
+  const ocean = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), oceanMaterial)
+  ocean.rotation.x = -Math.PI / 2
+  scene.add(ocean)
+
+  /** Whether the terrain is drawing water, which decides this plane's job. */
+  let waterOn = true
+  let seaY = 0
+  let bedY = 0
+
+  function layoutOcean(): void {
+    // A little below the terrain's waterline, so inside the map the terrain
+    // always wins the depth test and the two never share a plane. The step is
+    // invisible: it happens a kilometre out, in the same colour, and the fog
+    // has most of it by then.
+    ocean.position.y = waterOn ? seaY - 2 : bedY
+    const c = waterOn ? WATER_DEEP : DEEP_SILT
+    oceanMaterial.color.setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace)
+  }
+
+  function setOcean(water: boolean, fogged: boolean): void {
+    waterOn = water
+    if (oceanMaterial.fog !== fogged) {
+      oceanMaterial.fog = fogged
+      oceanMaterial.needsUpdate = true
+    }
+    layoutOcean()
+  }
 
   function setEnvironment(seaLevel: number, heightScale: number, extent: number): void {
+    seaY = seaLevel * heightScale
+    // Just below the terrain's zeroed border, so with the water off it reads as
+    // the same seabed rather than a second surface, and doesn't z-fight with it.
+    bedY = -0.02 * heightScale
+
     // The sea runs well past the island; its outer edge sits deep inside the
     // fog, so what you see is a horizon rather than a boundary.
     // Kept within the far plane with room to spare; the fog has fully taken
     // over by extent*9, so the sea's outer edge is never visible anyway.
     const span = extent * 20
-    water.geometry.dispose()
-    water.geometry = new THREE.PlaneGeometry(span, span)
-    water.position.y = seaLevel * heightScale
-
-    oceanFloor.geometry.dispose()
-    oceanFloor.geometry = new THREE.PlaneGeometry(span, span)
-    // Just below the terrain's zeroed border, so it reads as the same seabed
-    // rather than a second surface, and doesn't z-fight with it.
-    oceanFloor.position.y = -0.02 * heightScale
+    ocean.geometry.dispose()
+    ocean.geometry = new THREE.PlaneGeometry(span, span)
+    layoutOcean()
 
     const fog = scene.fog as THREE.Fog
     fog.near = extent * 1.5
@@ -133,10 +149,9 @@ export function createScene(canvasParent: HTMLElement): SceneBundle {
     renderer,
     scene,
     sun,
-    water,
-    waterMaterial,
     setEnvironment,
     setSun,
+    setOcean,
     resize,
   }
 }

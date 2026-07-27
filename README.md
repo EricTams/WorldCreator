@@ -105,18 +105,57 @@ npm install
 npm run dev        # http://localhost:5173
 npm run build      # production bundle into dist/
 npm run typecheck  # tsc --noEmit
+npm run pack-sprites  # rebuild the sprite atlas — needs TempArt/, see below
 ```
 
 Pushing to `main` builds and deploys to GitHub Pages automatically.
+
+## Art
+
+The pixel art — towns, mines, monster lairs, resources, creatures — is by
+**Aleksandr Makarov** ([@IknowKingRabbit](https://www.patreon.com/iknowkingrabbit)),
+used under the pack licence, which permits use in a game and asks for credit.
+The full licence and the artist's own thanks to his patrons are reproduced in
+[`src/assets/ART-CREDITS.md`](src/assets/ART-CREDITS.md).
+
+The raw packs live in an untracked `TempArt/` directory and are deliberately
+**not** in this repo — the licence allows shipping the art as part of a game, not
+as loose source files. Two build tools turn them into committed assets, both
+zero-dependency (they read and write PNG with `node:zlib`), and neither runs in
+CI, because CI has no `TempArt/`:
+
+- `npm run pack-sprites` → `src/assets/sprites.png` and `src/assets/units.png`,
+  two atlases from a curated manifest — the board's art in the first, the
+  creature walk cycles in the second. Only the first is loaded: nothing animates
+  creatures yet, and keeping them out halves the atlas the browser downloads.
+- `npm run pack-ground` → `src/assets/groundTiles.ts`, the seven biome ground
+  textures, embedded rather than shipped as a file because the whole strip is
+  7 KB.
+
+The ground tiles are worth a note. The overworld tilesets are autotile sheets —
+props on top, coast and cliff transitions in the middle — and exactly one tile in
+each is a usable terrain texture. It was found rather than chosen: of every 16×16
+tile in every sheet, only tile (11, 9) is both fully opaque and wraps against
+itself with zero edge error. Its alpha channel is rewritten at pack time to carry
+luminance relative to the tile's own mean, so the shader can multiply the
+terrain's elevation banding by it — adding the tileset's texture without dragging
+grass hue onto a snow cap.
+
+That atlas is the one binary in the repo, and it is a considered exception to
+the rule described under *Surface detail* below: a terrain texture can be
+generated from noise, a hand-drawn castle cannot.
 
 ## How it's laid out
 
 ```
 src/
   world/     the generator — pure TypeScript, imports nothing from Three.js
+             (heightmap, territories, where the cities go)
   render/    turns a height array into meshes
   game/      avatar and input
   ui/        the lil-gui control panel and compass
+  assets/    the sprite atlas and its generated frame map
+tools/       the atlas packer — build-time only, never imported by the app
 ```
 
 The split matters. `world/` takes `(seed, params)` and returns a

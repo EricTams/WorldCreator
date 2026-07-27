@@ -4,3 +4,12 @@ dist
 .DS_Store
 *.local
 .vite
+
+# Art-direction reference shots. Same reasoning as TempArt below: they're
+# other people's art, kept locally to look at rather than to ship.
+sample level art/
+
+# The raw art packs. Only the curated atlas built from them
+# (src/assets/sprites.png, via `npm run pack-sprites`) is committed — the
+# licence permits redistribution as part of a game, not as loose source files.
+TempArt
