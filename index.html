@@ -2,7 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover lets the fixed UI reach under the notch and home bar
+      and position itself with env(safe-area-inset-*); the scale lock stops a
+      double-tap on the d-pad zooming the page instead of moving the avatar.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
     <title>WorldCreator</title>
     <link
       rel="icon"
@@ -23,6 +31,9 @@
       #app {
         position: fixed;
         inset: 0;
+        /* The canvas has no touch gestures of its own, so hand every touch that
+           lands on it to nobody rather than to pull-to-refresh or pinch-zoom. */
+        touch-action: none;
       }
       canvas {
         display: block;
@@ -96,6 +107,135 @@
         white-space: nowrap;
         letter-spacing: 1px;
         opacity: 0.6;
+      }
+
+      /* --- Phone presentation --------------------------------------------
+         `is-touch` goes on the body once there's evidence of a touchscreen
+         (see ui/touchMode.ts). Everything that exists to *build* a world goes
+         away, leaving what you need to walk around one: the parameter panel,
+         the stats readout, and the keyboard hints under the compass are all
+         either unusable or unreadable on a phone.
+
+         The attribution line stays — the art licence asks for credit on
+         screen, which is not conditional on screen size. */
+      body.is-touch .lil-gui.autoPlace,
+      body.is-touch #status,
+      body.is-touch .compass-keys {
+        display: none;
+      }
+
+      /* --- Movement pad -------------------------------------------------
+         Thumb-reachable bottom corner, clear of the status line and credits on
+         the left. Hidden until something tells us there's a touchscreen. */
+      .dpad {
+        position: fixed;
+        right: calc(18px + env(safe-area-inset-right));
+        bottom: calc(18px + env(safe-area-inset-bottom));
+        display: none;
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: repeat(3, 1fr);
+        gap: 4px;
+        /* Capped against viewport *height*: play is landscape-only, so the
+           short axis is the one that runs out, and a pad taller than a third of
+           it stops being a thumb's reach. */
+        width: min(174px, 38vh);
+        height: min(174px, 38vh);
+        padding: 6px;
+        border-radius: 20px;
+        background: rgba(0, 0, 0, 0.42);
+        border: 1px solid rgba(207, 227, 245, 0.28);
+        /* Below lil-gui: an opened panel is working space and should win. */
+        z-index: 10;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      body.is-touch .dpad {
+        display: grid;
+      }
+      .dpad-cell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 11px;
+        background: rgba(207, 227, 245, 0.08);
+        color: #cfe3f5;
+        font-size: 15px;
+        line-height: 1;
+        opacity: 0.6;
+        transition: background-color 90ms ease, opacity 90ms ease;
+      }
+      .dpad-cell.is-active {
+        background: rgba(226, 101, 58, 0.85);
+        opacity: 1;
+      }
+      /* The deadzone reads as a hole in the ring rather than a ninth button. */
+      .dpad-hub {
+        background: none;
+      }
+      .dpad-arrow {
+        display: block;
+      }
+
+      /* --- Orientation ---------------------------------------------------
+         Play is landscape-only: the board wants the wide axis, and in portrait
+         the pad and the panel would between them own the screen. Rather than
+         let a phone into a view that doesn't work, cover it and say so. Purely
+         a media query — nothing pauses, so turning the phone resumes exactly
+         where it was. Desktops are exempt: a tall window is a choice there. */
+      .rotate-hint {
+        display: none;
+      }
+      @media (orientation: portrait) {
+        body.is-touch .rotate-hint {
+          position: fixed;
+          inset: 0;
+          /* Above lil-gui's 1001, so nothing shows through if the panel is
+             ever brought back on touch. */
+          z-index: 2000;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 18px;
+          background: #0b0f14;
+          color: #cfe3f5;
+          font-size: 15px;
+          text-align: center;
+          user-select: none;
+          -webkit-user-select: none;
+        }
+        .rotate-hint-phone {
+          width: 46px;
+          height: 74px;
+          border: 2px solid rgba(207, 227, 245, 0.7);
+          border-radius: 9px;
+          /* Caught mid-turn, which reads as "keep going" better than a static
+             upright phone does. */
+          transform: rotate(-58deg);
+          animation: rotate-hint-tip 2.6s ease-in-out infinite;
+        }
+        .rotate-hint-note {
+          opacity: 0.55;
+          font-size: 12px;
+        }
+      }
+      @keyframes rotate-hint-tip {
+        0%,
+        18% {
+          transform: rotate(0deg);
+        }
+        55%,
+        100% {
+          transform: rotate(-90deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .rotate-hint-phone {
+          animation: none;
+          transform: rotate(-90deg);
+        }
       }
 
       #status {
@@ -190,6 +330,13 @@
   <body>
     <div id="app"></div>
     <div id="status"></div>
+    <div class="rotate-hint">
+      <div class="rotate-hint-phone"></div>
+      <div>
+        Turn your phone sideways
+        <div class="rotate-hint-note">WorldCreator plays in landscape</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

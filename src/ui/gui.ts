@@ -286,6 +286,11 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
     .name('Magic Carpet view (ground)')
   cam.add({ v: () => cb.preset('follow') }, 'v').name('Behind the avatar')
 
+  // Collapsed to its title bar on load. The panel is a tuning tool, not part of
+  // playing, and on a phone an open one covers most of the screen — so the map
+  // is what you land on, and the controls are one tap away.
+  gui.close()
+
   return {
     gui,
     refreshDisplay: () => gui.controllersRecursive().forEach((c) => c.updateDisplay()),

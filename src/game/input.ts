@@ -12,6 +12,15 @@ export class Keyboard {
    * as your finger is down.
    */
   private pressed = new Set<string>()
+  /**
+   * Codes an on-screen control is holding down.
+   *
+   * Kept apart from `held` rather than written into it so the two can't corrupt
+   * each other: a keyup for W must not cancel a thumb that is still on the pad's
+   * north cell, and the pad can replace its whole direction on every move
+   * without remembering what it asserted last frame.
+   */
+  private virtual = new Set<string>()
   private onKeyDown: (e: KeyboardEvent) => void
   private onKeyUp: (e: KeyboardEvent) => void
   private onBlur: () => void
@@ -40,9 +49,13 @@ export class Keyboard {
       this.held.delete(e.code)
     }
     // Losing focus mid-keypress otherwise leaves the key stuck down forever.
+    // The pad is cleared too: backgrounding the page with a thumb down should
+    // stop the avatar, not leave it walking off on its own. The pad re-asserts
+    // itself on the next move, so this heals rather than sticks.
     this.onBlur = () => {
       this.held.clear()
       this.pressed.clear()
+      this.virtual.clear()
     }
 
     window.addEventListener('keydown', this.onKeyDown)
@@ -57,7 +70,20 @@ export class Keyboard {
   }
 
   isDown(code: string): boolean {
-    return this.held.has(code)
+    return this.held.has(code) || this.virtual.has(code)
+  }
+
+  /**
+   * Replace the set of codes an on-screen control is holding down.
+   *
+   * The d-pad steers by asserting the same movement codes a keyboard does — a
+   * diagonal is "north and east at once" there as it is here — so the avatar
+   * keeps reading exactly one movement input and never has to know which of the
+   * two the player used.
+   */
+  setVirtual(codes: readonly string[]): void {
+    this.virtual.clear()
+    for (const code of codes) this.virtual.add(code)
   }
 
   /** 1 if `pos` is held, -1 if `neg` is held, 0 if neither or both. */
@@ -85,5 +111,6 @@ export class Keyboard {
     window.removeEventListener('blur', this.onBlur)
     this.held.clear()
     this.pressed.clear()
+    this.virtual.clear()
   }
 }

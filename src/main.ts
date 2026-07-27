@@ -10,6 +10,8 @@ import { TerrainMesh } from './render/terrainMesh'
 import type { TerrainFrame } from './world/terrainQuery'
 import { Compass } from './ui/compass'
 import { Credits } from './ui/credits'
+import { DPad } from './ui/dpad'
+import { setTouchMode, startTouchDetection } from './ui/touchMode'
 import { buildGui } from './ui/gui'
 import { Heightmap } from './world/heightmap'
 import { defaultParams } from './world/params'
@@ -54,6 +56,13 @@ const keys = new Keyboard()
 const avatar = new Avatar()
 scene.scene.add(avatar.object)
 const compass = new Compass(document.body)
+// Touch movement. It feeds the same movement codes into `keys`, so nothing
+// downstream — the avatar, the fog, the follow camera — knows it exists.
+const dpad = new DPad(document.body, keys)
+// Built last of the HUD so the flag it sets finds every piece already on the
+// page; the panel itself is created further down and styles itself on the
+// next frame either way.
+startTouchDetection()
 // The art licence asks for attribution on screen, not just in the repo.
 new Credits(document.body)
 
@@ -746,6 +755,9 @@ if (import.meta.env.DEV) {
       avatar,
       rig,
       keys,
+      dpad,
+      /** `__world.touchMode(true)` to preview the phone HUD on a desktop. */
+      touchMode: setTouchMode,
       resetCamera,
       cards,
       scene,
