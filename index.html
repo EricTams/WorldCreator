@@ -220,6 +220,21 @@
           opacity: 0.55;
           font-size: 12px;
         }
+        /* The way out of a dead end. Chat apps open links in an embedded
+           viewer that is pinned to portrait, so for anyone arriving from one
+           the instruction above is impossible to follow and the game is simply
+           a wall — turning the phone does nothing. Shown to everyone rather
+           than sniffed for: the user agents are a moving target, and it costs
+           a line of small print to people who can just rotate. */
+        .rotate-hint-escape {
+          max-width: 20em;
+          margin: 0 22px;
+          padding-top: 14px;
+          border-top: 1px solid rgba(207, 227, 245, 0.14);
+          opacity: 0.5;
+          font-size: 12px;
+          line-height: 1.5;
+        }
       }
       @keyframes rotate-hint-tip {
         0%,
@@ -335,6 +350,11 @@
       <div>
         Turn your phone sideways
         <div class="rotate-hint-note">WorldCreator plays in landscape</div>
+      </div>
+      <div class="rotate-hint-escape">
+        Nothing happening when you turn it? You've opened this from a chat app,
+        and its built-in browser can't rotate. Use its menu to open the page in
+        Safari or Chrome.
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
