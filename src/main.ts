@@ -28,7 +28,7 @@ import {
   scatterDecorations,
   settlementLayout,
 } from './world/sites'
-import type { DecoSpot } from './world/sites'
+import type { DecoSpot, SitePad } from './world/sites'
 import { terrainHeightAt } from './world/terrainQuery'
 import { randomSeed } from './world/prng'
 import type { WorkerRequest, WorkerResponse } from './world/protocol'
@@ -302,18 +302,26 @@ const NEUTRAL_TINT = 0x9aa4ae
 /**
  * How wide a settlement is, as a multiple of its town card's width.
  *
- * Sized against the *houses*, not against the town. A town is 64 px and a house
- * 12, so at the shared pixel scale the town is ten world units across and its
- * huts are two. A ring at two town-widths therefore leaves ten units of arc
- * between neighbours — five house-widths of empty grass — and reads as a castle
- * with some sheds near it rather than as a settlement. Pulled in to just clear
- * the town's own footprint, where the houses crowd it the way a village crowds
- * a keep.
+ * These are the ring the buildings stand on, town included — not a band around
+ * something in the middle, because there is nothing in the middle. The plaza the
+ * ring encloses is about two town-widths across, which is room for an army to
+ * form up in without the village reading as a racetrack with a keep on it.
+ *
+ * The band between them is narrow on purpose. A wide band is a blob of houses; a
+ * narrow one is a street with a frontage, and the frontage is what makes the
+ * empty ground inside look enclosed rather than merely unoccupied.
  */
-const VILLAGE_INNER = 0.78
-const VILLAGE_OUTER = 1.35
-/** Margin between the outermost hut and the edge of the levelled terrace. */
-const VILLAGE_MARGIN = 1.18
+const VILLAGE_INNER = 0.92
+const VILLAGE_OUTER = 1.16
+/**
+ * Margin between the village's own footprint and the edge of the levelled
+ * terrace.
+ *
+ * The footprint is the ring plus half a town, since the town now stands *on*
+ * the ring and sweeps its own width as it yaw-billboards. Getting this wrong
+ * shows as the tallest card in the game standing half off its terrace.
+ */
+const VILLAGE_MARGIN = 1.06
 
 /**
  * The placed world: the capitals, the territories they define, and every card
@@ -329,6 +337,16 @@ interface WorldPlan {
   field: BiomeField | null
   /** Cities and their villages, in card order. */
   sites: CardSpec[]
+  /**
+   * The levelled ground each village stands on, centred on its plaza.
+   *
+   * Not carried by the town card the way it used to be. A card's pad is centred
+   * on the card, and the town now stands on the rim of its own circle — hanging
+   * the terrace off it would level a disc pushed a full ring-radius north of the
+   * village and leave the southern houses on whatever slope was there. The
+   * clearing belongs to the settlement, so the settlement holds it.
+   */
+  plazas: SitePad[]
   /**
    * Capitals whose surroundings stay permanently on the map.
    *
@@ -354,7 +372,7 @@ function planWorld(): WorldPlan | null {
   if (!frame) return null
 
   const townWidth = cards.spriteWidth('city.castle')
-  const clearing = townWidth * VILLAGE_OUTER * VILLAGE_MARGIN
+  const clearing = (townWidth * VILLAGE_OUTER + townWidth * 0.5) * VILLAGE_MARGIN
   const cities = params.biome.enabled
     ? placeCities(params.seed, frame, { count: params.biome.cities, clearing })
     : []
@@ -368,36 +386,45 @@ function planWorld(): WorldPlan | null {
       )
     : null
 
-  const sites: CardSpec[] = cities.map((c) => ({
-    sprite: BIOMES[c.biome].faction as SpriteKey,
-    x: c.x,
-    z: c.z,
-    tint: c.player ? PLAYER_TINT : NEUTRAL_TINT,
-    // One terrace for the whole village — see `CardSpec.clearing`.
-    clearing,
-  }))
-
-  // Satellites sit on the town's terrace, so they neither cut ground of their
-  // own nor push the treeline outward: `padScale: 0` turns off both. They keep
-  // a little legibility, unlike scenery — a cluster of huts is how a settlement
-  // reads from altitude, and letting them shrink away leaves one lonely town.
-  for (const spot of settlementLayout(cities, params.seed, {
+  const settlements = settlementLayout(cities, params.seed, {
     inner: townWidth * VILLAGE_INNER,
     outer: townWidth * VILLAGE_OUTER,
-  })) {
-    sites.push({
-      sprite: spot.sprite as SpriteKey,
-      x: spot.x,
-      z: spot.z,
-      scale: 0.9 + spot.size * 0.25,
-      padScale: 0,
-      discRadius: 0,
-      legibility: 0.5,
-    })
+    townWidth,
+  })
+
+  // Every card in a village stands on the village's terrace, so none of them cut
+  // ground of their own or push the treeline outward: `padScale: 0` turns off
+  // both. That now includes the town — the clearing it used to carry has moved
+  // to `plazas`, which is centred where the village is rather than where its
+  // largest building happens to stand.
+  const sites: CardSpec[] = settlements.map((s) => ({
+    sprite: BIOMES[s.city.biome].faction as SpriteKey,
+    x: s.town.x,
+    z: s.town.z,
+    tint: s.city.player ? PLAYER_TINT : NEUTRAL_TINT,
+    padScale: 0,
+  }))
+
+  // Houses keep a little legibility, unlike scenery — a cluster of buildings is
+  // how a settlement reads from altitude, and letting them shrink away leaves
+  // one lonely town.
+  for (const s of settlements) {
+    for (const spot of s.buildings) {
+      sites.push({
+        sprite: spot.sprite as SpriteKey,
+        x: spot.x,
+        z: spot.z,
+        scale: 0.9 + spot.size * 0.25,
+        padScale: 0,
+        discRadius: 0,
+        legibility: 0.5,
+      })
+    }
   }
 
+  const plazas: SitePad[] = cities.map((c) => ({ x: c.x, z: c.z, radius: clearing }))
   const owned = cities.filter((c) => c.player).map((c) => ({ x: c.x, z: c.z }))
-  return { cities, field, sites, owned }
+  return { cities, field, sites, plazas, owned }
 }
 
 /**
@@ -454,7 +481,10 @@ function cutSitePads(): void {
   // guarantees the terraces and the towns standing on them agree.
   plan = planWorld()
   if (!plan) return
-  flattenSitePads(current, effectiveCellSize(), cards.padsFor(plan.sites))
+  flattenSitePads(current, effectiveCellSize(), [
+    ...cards.padsFor(plan.sites),
+    ...plan.plazas,
+  ])
 }
 
 /**
@@ -482,10 +512,21 @@ function buildCards(): void {
   // it out.
   const treeWidth = 15 * (cards.scale / 16) * DECO_SCALE_MID
 
+  // A settlement's treeline belongs outside the whole village, so it stands off
+  // the plaza rather than off any one card in it — every village card carries
+  // `padScale: 0` and asks for no ring of its own. `decoRingsFor` is still
+  // consulted for anything else that gets sited later; zero-radius entries are
+  // dropped so the scatter's avoid test isn't walking a list of hundreds of
+  // buildings that block nothing.
+  const clearings = [
+    ...cards.decoRingsFor(sites),
+    ...plan.plazas.map((p) => ({ ...p, radius: p.radius * 1.08 })),
+  ].filter((pad) => pad.radius > 0)
+
   // Rings first: a site's own clearing gets a denser fringe than open country.
   // Then dress the rest of the island, keeping clear of those clearings.
   const seaY = params.shape.seaLevel * params.render.heightScale
-  const rings = ringDecorations(cards.decoRingsFor(sites), params.seed, field, {
+  const rings = ringDecorations(clearings, params.seed, field, {
     spacing: treeWidth * 1.35,
   }).filter((spot) => terrainHeightAt(frame, spot.x, spot.z) > seaY + 1)
 
@@ -502,7 +543,7 @@ function buildCards(): void {
         {
           spacing: params.render.scatterSpacing,
           blobScale: params.render.scatterBlob,
-          avoid: cards.decoRingsFor(sites),
+          avoid: clearings,
           maxCount: CARD_CAPACITY - sites.length - rings.length,
         },
       )

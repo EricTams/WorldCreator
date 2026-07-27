@@ -43,17 +43,6 @@ export interface CardSpec {
    * should sit in the landscape rather than reshape it.
    */
   padScale?: number
-  /**
-   * World-unit radius of ground this card commands, replacing the radius
-   * derived from its own width.
-   *
-   * For a cluster standing on one terrace. A settlement is a dozen cards, and
-   * giving each its own pad would cut a dozen overlapping graded skirts into the
-   * same hillside, which compound into a crater rather than into a plaza. So the
-   * town carries a clearing big enough for the whole village and its satellites
-   * carry `padScale: 0`.
-   */
-  clearing?: number
   /** Animation sheet indices; ignored by single-frame sprites. */
   frame?: number
   row?: number
@@ -331,9 +320,6 @@ export class CardLayer {
       // here, and it would have levelled the ground under every satellite the
       // moment a settlement was.
       if ((card.padScale ?? 1) <= 0) return { x: card.x, z: card.z, radius: 0 }
-      if (card.clearing !== undefined) {
-        return { x: card.x, z: card.z, radius: card.clearing }
-      }
       const { w } = this.worldSize(card)
       const radius = Math.max(w * PAD_SCALE * (card.padScale ?? 1), MIN_PAD)
       return { x: card.x, z: card.z, radius }
@@ -347,19 +333,16 @@ export class CardLayer {
    * on a slope, so it shrinks with the card and can legitimately fall below one
    * terrain cell; a decoration ring exists to be *seen*, and needs to stand off
    * the building by a visible margin whatever the world scale is.
+   *
+   * Per *card*, so it is only ever right for something that stands alone. A
+   * cluster's treeline belongs outside the whole cluster, not around each
+   * member of it — a settlement therefore rings its plaza rather than its
+   * buildings, and every card in it asks for nothing here.
    */
   decoRingsFor(cards: readonly CardSpec[]): SitePad[] {
     return cards.map((card) => {
       if ((card.padScale ?? 1) <= 0) return { x: card.x, z: card.z, radius: 0 }
-      // A settlement's treeline belongs outside the whole village, not around
-      // the town card in the middle of it. Standing off the clearing rather than
-      // the sprite is the difference between a wood at the edge of the fields
-      // and a wood growing through the houses.
-      const radius =
-        card.clearing !== undefined
-          ? card.clearing * 1.08
-          : Math.max(this.worldSize(card).w * 1.9, 5)
-      return { x: card.x, z: card.z, radius }
+      return { x: card.x, z: card.z, radius: Math.max(this.worldSize(card).w * 1.9, 5) }
     })
   }
 

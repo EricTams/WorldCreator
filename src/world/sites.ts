@@ -197,12 +197,24 @@ export function scatterDecorations(
 }
 
 /**
- * Points walked evenly around a circle, jittered within their own arc.
+ * Points walked evenly around a circle — or around an arc of one — jittered
+ * within their own step.
  *
  * Even angular steps rather than fully random angles: pure random clumps and
  * leaves bald arcs, which reads as a mistake rather than as nature. `skip` is
  * the chance of dropping a step, so the result never closes into a suspiciously
  * neat hedge — or, for a settlement, a ring of teeth.
+ *
+ * `start` and `sweep` cover the arc, defaulting to the whole circle. A
+ * settlement uses them to leave the arc its town already occupies alone, which
+ * is the difference between houses beside the keep and houses inside it.
+ *
+ * An open arc puts its first and last point *on* its ends rather than half a
+ * step inside them. A closed ring has no ends and must not — its first and last
+ * points are neighbours, and seating them both on the seam would double up
+ * there. The distinction matters: spacing an arc as though it were closed
+ * leaves half a step of nothing at each end, which around a settlement reads as
+ * the town having been shouldered out of its own circle.
  *
  * All three values for a step are drawn before anything is decided, so the
  * stream does not depend on which steps survive.
@@ -212,24 +224,85 @@ function ringPoints(
   cz: number,
   count: number,
   rng: () => number,
-  opts: { inner: number; outer: number; skip: number },
+  opts: { inner: number; outer: number; skip: number; start?: number; sweep?: number },
 ): { x: number; z: number }[] {
   const out: { x: number; z: number }[] = []
   if (count <= 1) return out
 
-  const step = (Math.PI * 2) / count
+  const start = opts.start ?? 0
+  const sweep = opts.sweep ?? Math.PI * 2
+  const closed = sweep >= Math.PI * 2 - 1e-6
+  const step = sweep / (closed ? count : count - 1)
   for (let i = 0; i < count; i++) {
     const drop = rng()
     const spin = rng()
     const reach = rng()
     if (drop < opts.skip) continue
 
-    const angle = i * step + (spin - 0.5) * step * 0.8
+    const angle = start + i * step + (spin - 0.5) * step * 0.8
     const r = opts.inner + (opts.outer - opts.inner) * reach
     out.push({ x: cx + Math.cos(angle) * r, z: cz + Math.sin(angle) * r })
   }
   return out
 }
+
+/** A capital and the village drawn around it. */
+export interface Settlement {
+  /** The capital this village belongs to. */
+  city: City
+  /**
+   * Where the town card stands — on the ring, not in the middle of it. The
+   * capital's own coordinate stays the *plaza* centre, which is what the
+   * territory, the terrace and the fog are all anchored to.
+   */
+  town: { x: number; z: number }
+  /** The lesser buildings, completing the circle the town starts. */
+  buildings: DecoSpot[]
+}
+
+/**
+ * Which way round the ring the town sits, as an angle in the same convention
+ * `ringPoints` uses — so -90° is -Z, due north of the plaza.
+ *
+ * North is the far side of the board: the camera rests due south of its target
+ * and eases back to north-up whenever it is let go, so the northern arc is the
+ * one that draws behind everything else in the village. That makes the town the
+ * back wall of the circle from the resting view, with its houses curving toward
+ * the camera on both sides.
+ */
+const TOWN_BEARING = -Math.PI / 2
+
+/**
+ * How far a town may drift off due north, in radians either side.
+ *
+ * Every capital squared to the same bearing makes fifteen villages that are
+ * visibly one village stamped fifteen times. A fifth of a radian — about 11° —
+ * is enough that no two rings line up, and far short of enough to stop the town
+ * reading as the back of its own circle.
+ */
+const TOWN_LEAN = 0.2
+
+/**
+ * Clear space either side of the town, as a multiple of its half-width.
+ *
+ * The town is a card that yaw-billboards, so it sweeps its full width as the
+ * camera orbits; the houses have to start outside that sweep or they will pass
+ * through it from some bearings. The extra quarter is about one house-width of
+ * gap — enough that the town keeps its own silhouette, close enough that the
+ * arc still reads as continuing into it rather than as stopping short of it.
+ */
+const TOWN_CLEARANCE = 1.25
+
+/**
+ * Spacing between houses around the ring, as a multiple of the town's width.
+ *
+ * A house is about a fifth of a town wide, so this is roughly a house-and-a-half
+ * of pitch: neighbours nearly touch, which is what makes the arc read as a
+ * street rather than as scattered sheds. Derived from the town's width rather
+ * than fixed in world units so that rescaling the art keeps the ring equally
+ * crowded instead of quietly thinning it into a dotted line.
+ */
+const HOUSE_PITCH = 0.28
 
 /**
  * Grow a village around each capital.
@@ -239,12 +312,14 @@ function ringPoints(
  * what actually catch the eye from strategy altitude — one large silhouette is a
  * marker, a cluster of small ones is a settlement.
  *
- * The town is not offset "to the back" of its village. It is the tallest card by
- * four times, and the cards yaw-billboard while the camera orbits, so a fixed
- * rearward offset would read correctly from exactly one bearing and put the town
- * in front of its own houses from the opposite one. Centred, the near arc always
- * draws in front of it and the far arc behind, so it reads as the back of the
- * village from every angle — which is what the offset was reaching for.
+ * The town stands *on* the ring rather than inside it. Centring it was the
+ * earlier arrangement, and it defended itself on billboarding grounds — a
+ * rearward offset reads correctly from one bearing and puts the town in front of
+ * its own houses from the opposite one. True, but it costs the thing the layout
+ * is actually for: a town in the middle fills the middle, and the middle is
+ * where an army has to be able to stand. So the town takes the northern arc of
+ * the circle, the houses take the rest of it, and what is left is an empty plaza
+ * with a wall of buildings all the way round it.
  *
  * Buildings are chosen by role and biome affinity out of the generated manifest
  * rather than from a list here, so the Frostmark gets its snow-roofed set and
@@ -253,29 +328,67 @@ function ringPoints(
 export function settlementLayout(
   cities: readonly City[],
   seed: string,
-  opts: { inner: number; outer: number },
-): DecoSpot[] {
+  opts: {
+    /** Innermost radius a house may stand at. */
+    inner: number
+    /** The ring proper: where the town stands, and the outer edge of the houses. */
+    outer: number
+    /** World width of the town card, which sets its arc and the house pitch. */
+    townWidth: number
+  },
+): Settlement[] {
   const rng = makeRng(seed, 'settlement')
-  const out: DecoSpot[] = []
+  const out: Settlement[] = []
 
   for (const city of cities) {
+    // Drawn before anything is decided, so a biome with no building kit does not
+    // desynchronise the stream for every village after it.
+    const lean = (rng() * 2 - 1) * TOWN_LEAN
     const kit = spritesWithRole('settlement', BIOMES[city.biome].id)
-    // Fourteen to twenty. Set by arc spacing rather than by taste: the ring is
-    // about seven town-radii around and a hut is a fifth of a town wide, so
-    // anything under a dozen leaves visible gaps of open grass between
-    // neighbours and the group stops reading as one place.
-    const count = 14 + Math.floor(rng() * 7)
-    if (kit.length === 0) continue
 
+    const bearing = TOWN_BEARING + lean
+    const town = {
+      x: city.x + Math.cos(bearing) * opts.outer,
+      z: city.z + Math.sin(bearing) * opts.outer,
+    }
+    if (kit.length === 0) {
+      out.push({ city, town, buildings: [] })
+      continue
+    }
+
+    // The arc the town itself takes out of the circle, measured at the radius it
+    // stands on — a wide card close in blocks far more of the ring than the same
+    // card further out, and the houses have to know which.
+    const blocked = Math.atan2(opts.townWidth * 0.5 * TOWN_CLEARANCE, opts.outer)
+    const sweep = Math.PI * 2 - blocked * 2
+
+    // Count follows the arc that is actually free, so the ring keeps its density
+    // whether the town is hogging a fifth of it or a tenth.
+    const mid = (opts.inner + opts.outer) * 0.5
+    const count = Math.max(3, Math.round((sweep * mid) / (opts.townWidth * HOUSE_PITCH)))
+
+    const buildings: DecoSpot[] = []
     for (const pt of ringPoints(city.x, city.z, count, rng, {
       inner: opts.inner,
       outer: opts.outer,
-      skip: 0.15,
+      // Barely any. The old ring was decoration around a town and could afford
+      // gaps; this one is the wall of the plaza, and a hole in it reads as a
+      // missing building rather than as a lane.
+      skip: 0.08,
+      start: bearing + blocked,
+      sweep,
     })) {
       const pick = rng()
       const size = rng()
-      out.push({ x: pt.x, z: pt.z, sprite: kit[Math.floor(pick * kit.length)], size })
+      buildings.push({
+        x: pt.x,
+        z: pt.z,
+        sprite: kit[Math.floor(pick * kit.length)],
+        size,
+      })
     }
+
+    out.push({ city, town, buildings })
   }
 
   return out
