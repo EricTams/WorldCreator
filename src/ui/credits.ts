@@ -7,7 +7,7 @@ import {
 } from '../assets/artCredits'
 
 /**
- * The art credit, on screen.
+ * The art credit, on screen — and, next to it, which build you are looking at.
  *
  * Two layers, because the licence and the artist ask for different things. The
  * attribution line is always visible and never needs a click — that is the part
@@ -15,6 +15,12 @@ import {
  * for is not a credit. The patron list the artist asked to have carried along
  * is behind that line, because sixty names permanently over the map would be
  * the map's problem rather than the credit's.
+ *
+ * The build marker rides along here rather than in the stats readout because
+ * this is the one piece of HUD that survives touch mode, and a phone loading
+ * through a home-screen icon and an HTTP cache is exactly where "did my change
+ * actually ship?" is impossible to answer otherwise. Outside the button: it is
+ * something to read, not something to press.
  */
 export class Credits {
   readonly element: HTMLElement
@@ -25,9 +31,14 @@ export class Credits {
     this.element = document.createElement('div')
     this.element.className = 'credits'
     this.element.innerHTML = `
-      <button class="credits-line" type="button" aria-expanded="false">
-        Art by <strong>${ART_ARTIST}</strong> · ${ART_HANDLE}
-      </button>
+      <div class="credits-row">
+        <button class="credits-line" type="button" aria-expanded="false">
+          Art by <strong>${ART_ARTIST}</strong> · ${ART_HANDLE}
+        </button>
+        <span class="credits-build" title="Build ${__BUILD_SHA__}, ${__BUILD_DATE__}"
+          >${__BUILD_SHA__} · ${__BUILD_DATE__}</span
+        >
+      </div>
       <div class="credits-panel" hidden>
         <div class="credits-head">
           <div>

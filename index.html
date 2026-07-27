@@ -12,6 +12,42 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <title>WorldCreator</title>
+    <!--
+      Launched from a home-screen icon, this should be the game and not a page
+      about the game. Without `apple-mobile-web-app-capable` iOS opens the icon
+      in a Safari view complete with a top bar and a bottom toolbar, and since
+      the canvas is full-bleed (viewport-fit=cover, above) that toolbar sits on
+      top of the lower strip of it — which is what put the avatar at the bottom
+      middle of the screen instead of the middle. Standalone removes the bars
+      rather than compensating for them.
+
+      `black-translucent` keeps the status bar out of the layout so the picture
+      still reaches the top edge; the safe-area insets it leaves behind are read
+      by the camera (see render/camera.ts) and framed around.
+
+      Anyone who added the icon before this shipped has to re-add it — iOS
+      decides standalone-or-not when the icon is created, not when it is opened.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="WorldCreator" />
+    <meta name="theme-color" content="#0b0f14" />
+    <!--
+      The bundles are content-hashed and can be cached forever; this file names
+      them and therefore must not be. GitHub Pages serves no headers we control,
+      so this is the only lever available — honestly a weak one, since a
+      standalone iOS app may still hold a copy. The build marker in the corner
+      is the backstop: it tells you when you are looking at a stale one.
+    -->
+    <meta http-equiv="Cache-Control" content="no-cache" />
+    <!--
+      Relative, not root-absolute: the page is served from /WorldCreator/ once
+      deployed and from / by the dev server, and a relative href is correct in
+      both. iOS ignores the manifest's icons and uses the apple-touch-icon.
+    -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icon-180.png" />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%232f6f9e'/%3E%3Cpath d='M0 11l4-5 3 3 3-5 6 7v5H0z' fill='%234a7c3f'/%3E%3Cpath d='M10 4l3 3.5-1.6 1.2L10 4z' fill='%23eef2f5'/%3E%3C/svg%3E"
@@ -292,6 +328,24 @@
         color: #cfe3f5;
         font-size: 11px;
         user-select: none;
+      }
+      .credits-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      /* Which build is on screen. Quiet enough to ignore while playing, legible
+         enough to read off a phone without zooming — the whole point is that
+         you can answer "did it update?" without a console. */
+      .credits-build {
+        padding: 4px 7px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.55);
+        font-size: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.3px;
+        opacity: 0.6;
+        white-space: nowrap;
       }
       .credits-line {
         display: block;
