@@ -828,7 +828,20 @@ function onResize(): void {
   // re-derived whenever the viewport or the field of view changes.
   cards.setViewport(h, rig.camera.fov)
 }
-window.addEventListener('resize', onResize)
+
+// Watch the element, not the window.
+//
+// They are the same box — `#app` is `inset: 0` — but not the same *event*. A
+// phone changes shape at moments the window event reports late, or reports with
+// the dimensions it had a moment ago: turning it from portrait to landscape is
+// the one that matters here, since that is how every phone session starts. A
+// ResizeObserver fires off the box actually changing, so the render buffer
+// follows the screen instead of trailing it, and it covers the cases no resize
+// event fires for at all — a webview's chrome appearing, or the address bar
+// collapsing after the first scroll.
+new ResizeObserver(onResize).observe(appEl)
+// The observer's first callback is a frame away, and the first frame should not
+// be drawn at the renderer's default size.
 onResize()
 
 rig.fitToWorld(params.mapSize * params.render.cellSize, params.render.heightScale)

@@ -35,8 +35,16 @@
            lands on it to nobody rather than to pull-to-refresh or pinch-zoom. */
         touch-action: none;
       }
-      canvas {
+      /* The canvas fills its container rather than carrying a pixel size of its
+         own. The renderer sets the drawing buffer and leaves the display size
+         alone (see render/scene.ts), so the picture always covers the screen
+         even on the frame after a rotation, when the measured size is briefly
+         the old one. Without this the canvas laid out at whatever was last
+         measured, pinned to the top-left corner. */
+      #app > canvas {
         display: block;
+        width: 100%;
+        height: 100%;
       }
       .compass {
         position: fixed;
