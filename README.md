@@ -35,6 +35,22 @@ slope when it's near the ground and levels off as it lifts clear — a carpet
 hovering well above a hillside while still tilted to match it looks tethered to
 terrain it isn't touching.
 
+A soft round shadow is laid on the ground directly beneath it. Riding four body
+heights up, the figure and the ground under it are drawn nowhere near each other
+on screen, and the shadow is what ties them together — you can see which side of
+a shoreline or a ridge you are actually over. It's cast **straight down rather
+than along the sun**, on purpose: at the default 32° sun elevation a true shadow
+lands tens of metres downhill, which answers a question nobody flying is asking.
+The disc conforms to the surface vertex by vertex, so it bends and tilts with
+what's underneath and shows you the slope you're about to land on, and it widens
+and thins with hover height the way a penumbra does.
+
+It samples the surface the terrain mesh actually *draws* — the two triangles per
+cell — rather than the smooth field underneath it. Those are not the same
+surface: with 8 metres between grid corners the smooth one runs metres above the
+triangles on a ridge, and the first version of this sank into the hillside and
+came out as a crescent.
+
 ### Scale and speed
 
 The island is **2 km across** (256 cells × 8 units, reading 1 unit as 1 m) and

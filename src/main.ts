@@ -55,6 +55,10 @@ scene.scene.add(terrain.group)
 const keys = new Keyboard()
 const avatar = new Avatar()
 scene.scene.add(avatar.object)
+// Added alongside the avatar rather than inside it: the shadow lies on the
+// terrain in world space, and everything in `avatar.object` is measured from a
+// frame that hovers, yaws and scales with the figure.
+scene.scene.add(avatar.shadow.object)
 const compass = new Compass(document.body)
 // Touch movement. It feeds the same movement codes into `keys`, so nothing
 // downstream — the avatar, the fog, the follow camera — knows it exists.
@@ -132,6 +136,10 @@ function coastShelf(): { shelfRise: number; shelfBand: number } {
 
 function syncAvatarVisibility(): void {
   avatar.object.visible = params.avatar.enabled
+  // The shadow is a sibling, so it doesn't inherit the avatar's visibility —
+  // and hiding the figure has to take its shadow with it, or the map is left
+  // with a dark spot sliding around on ground nothing is standing over.
+  avatar.shadow.object.visible = params.avatar.enabled && params.avatar.shadow
   avatar.setScale(params.avatar.scale)
   rig.follow(params.avatar.enabled && params.avatar.followCamera ? avatar.position : null)
 }

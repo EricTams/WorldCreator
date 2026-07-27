@@ -217,6 +217,15 @@ export interface AvatarParams {
   hover: number
   fly: boolean
   scale: number
+  /**
+   * Cast a round shadow straight down onto the ground.
+   *
+   * A hovering figure and the ground under it are drawn at different depths, so
+   * without one you can't tell which side of a shoreline you're over — and the
+   * disc conforms to the surface, so it also shows you the slope you're about
+   * to land on.
+   */
+  shadow: boolean
   followCamera: boolean
 }
 
@@ -491,6 +500,7 @@ export function defaultParams(): WorldParams {
       // person-sized against a 2 km island, and it carries the ride height
       // down with it since hover is measured in body heights.
       scale: 1.1,
+      shadow: true,
       followCamera: true,
     },
     camera: {

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { GroundShadow } from '../render/groundShadow'
 import { sampleHeightAndGradient } from '../world/heightmap'
 import { terrainRawHeightAt } from '../world/terrainQuery'
 import type { TerrainFrame } from '../world/terrainQuery'
@@ -13,6 +14,8 @@ export interface AvatarSettings {
   hover: number
   fly: boolean
   scale: number
+  /** Cast a round shadow on the ground below, to show what you're over. */
+  shadow: boolean
 }
 
 /**
@@ -46,8 +49,30 @@ export class Avatar {
    */
   static readonly HEIGHT = 1.66
 
+  /**
+   * Local-space carpet footprint. Comfortably wider than the body (radius 0.5),
+   * or the figure sits on it like a plug and you never see the rug from the
+   * overhead follow angle.
+   *
+   * Named rather than inlined because the ground shadow is sized from the
+   * length: the rug is the widest part of the avatar's ground plan, and a
+   * shadow narrower than the thing casting it reads as a different object.
+   */
+  static readonly CARPET_WIDTH = 2.0
+  static readonly CARPET_LENGTH = 2.9
+
   readonly object = new THREE.Group()
   readonly position = new THREE.Vector3()
+
+  /**
+   * The disc on the ground underneath, in world space.
+   *
+   * Not a child of `object`, deliberately: everything in that group is measured
+   * from the avatar's own hovering, yawed, scaled frame, and the shadow is the
+   * one part of it that belongs to the *terrain*. Whoever builds the scene adds
+   * it alongside — see `shadow.object`.
+   */
+  readonly shadow = new GroundShadow()
 
   private facing = 0
   private body: THREE.Mesh
@@ -118,10 +143,8 @@ export class Avatar {
    * hundred vertices and this keeps it asset-free like everything else here.
    */
   private static makeCarpet(): THREE.Mesh {
-    // Comfortably wider than the body (radius 0.5), or the figure sits on it
-    // like a plug and you never see the rug from the overhead follow angle.
-    const WIDTH = 2.0
-    const LENGTH = 2.9
+    const WIDTH = Avatar.CARPET_WIDTH
+    const LENGTH = Avatar.CARPET_LENGTH
     const geo = new THREE.PlaneGeometry(WIDTH, LENGTH, 10, 14)
     // Lay it flat; the plane's height axis becomes the carpet's length (Z),
     // which is the direction the avatar faces.
@@ -236,6 +259,11 @@ export class Avatar {
     return Avatar.HEIGHT * this.object.scale.x
   }
 
+  /** Radius of the avatar's ground footprint in world units, at its scale. */
+  get footprintRadius(): number {
+    return (Avatar.CARPET_LENGTH / 2) * this.object.scale.x
+  }
+
   /** Ride height in world units, from `hover` given in body heights. */
   private hoverDistance(settings: AvatarSettings): number {
     return settings.hover * this.worldHeight
@@ -277,6 +305,10 @@ export class Avatar {
     const sea = frame.seaLevel * frame.heightScale
     this.position.set(worldX, Math.max(ground, sea) + this.hoverDistance(settings), worldZ)
     this.syncObject()
+    // The ground moved under it — after a regenerate, a rescale, or a teleport
+    // — so the shadow has to be re-laid here rather than waiting a frame. It
+    // is the one part of the avatar that isn't carried by `object`.
+    this.updateShadow(frame, settings)
   }
 
   /**
@@ -344,6 +376,7 @@ export class Avatar {
       this.alignCarpet(frame, settings.hover)
     }
     this.syncObject()
+    this.updateShadow(frame, settings)
     return moving
   }
 
@@ -352,10 +385,24 @@ export class Avatar {
     this.object.rotation.y = this.facing
   }
 
+  /**
+   * Re-lay the ground shadow under wherever the avatar now is.
+   *
+   * Skipped entirely when it's switched off — the disc costs a few dozen
+   * heightfield samples a frame, and there's no reason to pay for them just to
+   * write them into a hidden mesh. Whoever owns the scene hides the object; see
+   * `syncAvatarVisibility` in main.ts.
+   */
+  private updateShadow(frame: TerrainFrame, settings: AvatarSettings): void {
+    if (!settings.shadow) return
+    this.shadow.update(frame, this.position, this.footprintRadius)
+  }
+
   dispose(): void {
     this.object.traverse((o) => {
       if (o instanceof THREE.Mesh) o.geometry.dispose()
     })
     for (const m of this.materials) m.dispose()
+    this.shadow.dispose()
   }
 }
