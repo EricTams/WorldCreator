@@ -19,6 +19,15 @@
     <style>
       :root {
         color-scheme: dark;
+        /* The notch and the home bar, republished as custom properties so the
+           renderer can read them. `env()` is only usable inside CSS, and the
+           camera needs the numbers: the canvas runs full-bleed underneath both
+           (viewport-fit=cover, above), so these are the strips of it nobody can
+           see, and the view has to be centred on what is left. */
+        --inset-top: env(safe-area-inset-top, 0px);
+        --inset-right: env(safe-area-inset-right, 0px);
+        --inset-bottom: env(safe-area-inset-bottom, 0px);
+        --inset-left: env(safe-area-inset-left, 0px);
       }
       html,
       body {

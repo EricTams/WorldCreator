@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { Avatar } from './game/avatar'
 import { Keyboard } from './game/input'
-import { createCameraRig, type ViewPreset } from './render/camera'
+import { createCameraRig, type ViewInsets, type ViewPreset } from './render/camera'
 import { CardLayer, type CardSpec } from './render/cardLayer'
 import { createScene } from './render/scene'
 import { loadSpriteAtlas } from './render/spriteAtlas'
@@ -819,11 +819,47 @@ if (import.meta.env.DEV) {
 
 // --- loop -------------------------------------------------------------------
 
+/**
+ * How much of the canvas is hidden, and by what.
+ *
+ * Two sources, because they cover different things and neither knows about the
+ * other. `env(safe-area-inset-*)` — republished as custom properties in
+ * index.html — is the hardware: the notch and the home bar. The visual viewport
+ * is the browser's own furniture: the toolbar a phone keeps at the bottom in
+ * landscape, which overlays the page rather than shortening it, since `#app` is
+ * `inset: 0` of the *layout* viewport and that is measured with the bars away.
+ *
+ * The larger of the two wins per edge. They overlap on a phone that has both,
+ * and adding them would double-count the overlap and over-correct.
+ */
+function canvasInsets(w: number, h: number): ViewInsets {
+  const css = getComputedStyle(document.documentElement)
+  const env = (name: string): number => parseFloat(css.getPropertyValue(name)) || 0
+
+  const insets = {
+    left: env('--inset-left'),
+    top: env('--inset-top'),
+    right: env('--inset-right'),
+    bottom: env('--inset-bottom'),
+  }
+
+  const vv = window.visualViewport
+  // Ignore a pinch-zoomed viewport: the page forbids zooming, so a scale other
+  // than 1 is a transient the framing should not chase.
+  if (vv && Math.abs(vv.scale - 1) < 0.01) {
+    insets.left = Math.max(insets.left, vv.offsetLeft)
+    insets.top = Math.max(insets.top, vv.offsetTop)
+    insets.right = Math.max(insets.right, w - vv.offsetLeft - vv.width)
+    insets.bottom = Math.max(insets.bottom, h - vv.offsetTop - vv.height)
+  }
+  return insets
+}
+
 function onResize(): void {
   const w = appEl.clientWidth
   const h = appEl.clientHeight
   scene.resize(w, h)
-  rig.resize(w / Math.max(1, h))
+  rig.resize(w, h, canvasInsets(w, h))
   // The cards' legibility floor is measured in real pixels, so it has to be
   // re-derived whenever the viewport or the field of view changes.
   cards.setViewport(h, rig.camera.fov)
@@ -840,6 +876,11 @@ function onResize(): void {
 // event fires for at all — a webview's chrome appearing, or the address bar
 // collapsing after the first scroll.
 new ResizeObserver(onResize).observe(appEl)
+// The visual viewport moves without the layout viewport changing at all — a
+// toolbar sliding away uncovers part of the canvas without resizing it — so the
+// observer above never hears about it.
+window.visualViewport?.addEventListener('resize', onResize)
+window.visualViewport?.addEventListener('scroll', onResize)
 // The observer's first callback is a frame away, and the first frame should not
 // be drawn at the renderer's default size.
 onResize()
