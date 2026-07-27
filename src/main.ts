@@ -885,6 +885,28 @@ window.visualViewport?.addEventListener('scroll', onResize)
 // be drawn at the renderer's default size.
 onResize()
 
+/**
+ * Register the service worker — see public/sw.js for what it is for.
+ *
+ * Production only. In development the whole point is that a reload shows the
+ * edit you just made, and a worker sitting between the page and the dev server
+ * is a machine for making that untrue.
+ *
+ * The build SHA rides on the URL rather than being baked into the worker, which
+ * is what makes an update land: the browser compares the script *URL* and its
+ * bytes, so a new build is unambiguously a new worker, and the old one's caches
+ * are dropped as it activates. Registered after load so it never competes with
+ * the terrain for the first paint, and a failure is logged rather than thrown —
+ * offline support is a nicety, and the game runs without it.
+ */
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}sw.js?v=${__BUILD_SHA__}`)
+      .catch((err) => console.warn('[sw] registration failed', err))
+  })
+}
+
 rig.fitToWorld(params.mapSize * params.render.cellSize, params.render.heightScale)
 rig.apply('populous')
 applyCameraParams()

@@ -24,18 +24,36 @@ const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'public')
 
 // The favicon's own 16x16 coordinate space, so the two cannot drift apart.
 const VIEW = 16
+/** Well outside any view drawn here. See `HILL`. */
+const FAR = 1000
+/**
+ * How much of a maskable icon is guaranteed to survive the mask.
+ *
+ * Android crops an adaptive icon to whatever shape the launcher prefers — a
+ * circle, a squircle, a rounded square — and only the middle 80% is safe in all
+ * of them. So the maskable variant is drawn zoomed out by that much: the same
+ * picture, framed wider, with the corners it stands to lose carrying nothing
+ * but more sky and more hillside.
+ */
+const SAFE = 0.8
 const SKY = [0x2f, 0x6f, 0x9e]
 const HILL_COLOUR = [0x4a, 0x7c, 0x3f]
 const SNOW_COLOUR = [0xee, 0xf2, 0xf5]
 
+// The silhouette inside 0..16 is the favicon's exactly; the far-flung points
+// only extend the flat ground and the fill downward, past any view this draws.
+// A maskable icon is framed wider than the artwork, and without them the hill
+// would stop at the favicon's edge and float on a band of sky.
 const HILL = [
+  [-FAR, 11],
   [0, 11],
   [4, 6],
   [7, 9],
   [10, 4],
   [16, 11],
-  [16, 16],
-  [0, 16],
+  [FAR, 11],
+  [FAR, FAR],
+  [-FAR, FAR],
 ]
 const SNOW = [
   [10, 4],
@@ -57,7 +75,12 @@ function inside(poly, x, y) {
 /** 4x4 supersampling, because a diagonal skyline at 180px is all anyone sees. */
 const SS = 4
 
-function render(size) {
+/**
+ * `span` is how much of the 16-unit artwork the icon covers: 16 frames it
+ * exactly, more zooms out and leaves margin for a mask to eat.
+ */
+function render(size, span = VIEW) {
+  const origin = (VIEW - span) / 2
   // One filter byte per row, then RGB triples.
   const stride = size * 3 + 1
   const raw = Buffer.alloc(stride * size)
@@ -70,8 +93,8 @@ function render(size) {
       let b = 0
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
-          const x = ((px + (sx + 0.5) / SS) / size) * VIEW
-          const y = ((py + (sy + 0.5) / SS) / size) * VIEW
+          const x = origin + ((px + (sx + 0.5) / SS) / size) * span
+          const y = origin + ((py + (sy + 0.5) / SS) / size) * span
           const c = inside(SNOW, x, y)
             ? SNOW_COLOUR
             : inside(HILL, x, y)
@@ -114,7 +137,7 @@ function chunk(type, data) {
   return out
 }
 
-function png(size) {
+function png(size, span) {
   const ihdr = Buffer.alloc(13)
   ihdr.writeUInt32BE(size, 0)
   ihdr.writeUInt32BE(size, 4)
@@ -123,13 +146,23 @@ function png(size) {
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(render(size), { level: 9 })),
+    chunk('IDAT', deflateSync(render(size, span), { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ])
 }
 
-for (const size of [180, 512]) {
-  const file = join(OUT, `icon-${size}.png`)
-  writeFileSync(file, png(size))
+// 180 is what iOS reads for `apple-touch-icon`; 192 and 512 are the pair
+// Chrome's install criteria ask for; the maskable one is Android's adaptive
+// icon, which is the same picture drawn with room to be cropped.
+const ICONS = [
+  ['icon-180.png', 180, VIEW],
+  ['icon-192.png', 192, VIEW],
+  ['icon-512.png', 512, VIEW],
+  ['icon-maskable-512.png', 512, VIEW / SAFE],
+]
+
+for (const [name, size, span] of ICONS) {
+  const file = join(OUT, name)
+  writeFileSync(file, png(size, span))
   console.log(`wrote ${file}`)
 }
