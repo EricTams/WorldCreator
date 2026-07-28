@@ -99,7 +99,7 @@ AI wizards use exactly the same two spells under the same costs.
 | **1** then **click** | Arm Fireball, then throw it at the clicked ground |
 | **E** | Consecrate the site underfoot |
 | **Click an army row**, then **click the map** | Send that army to the nearest known site to the click |
-| **Shift-click an army row** | Recall it home |
+| **Home** button on an army row | Recall it home (shift-clicking the row does the same) |
 | **Esc** | Cancel an armed spell or a pending order |
 | **C** | Reset the view |
 

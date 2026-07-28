@@ -321,6 +321,16 @@
         user-select: none;
         -webkit-user-select: none;
       }
+      /* Padding counts *inside* a declared width, everywhere in the HUD.
+         Buttons already default to border-box and divs do not, so the army row
+         gained 20px of padding the moment it stopped being a <button> to make
+         room for the Home button inside it — enough to overflow the panel and
+         raise a horizontal scrollbar. Setting it once here means the next
+         element that changes tag doesn't rediscover that. */
+      .hud,
+      .hud * {
+        box-sizing: border-box;
+      }
       .hud button {
         pointer-events: auto;
         font: inherit;
@@ -423,6 +433,8 @@
         opacity: 0.6;
         line-height: 1.45;
       }
+      /* A div, not a button — it contains the Home button, and a button inside a
+         button is markup the browser silently repairs by throwing one away. */
       .hud-army {
         display: block;
         width: 100%;
@@ -433,7 +445,12 @@
         background: rgba(0, 0, 0, 0.55);
         color: inherit;
         text-align: left;
+        cursor: pointer;
         transition: background-color 120ms ease, border-color 120ms ease;
+      }
+      .hud-army:focus-visible {
+        outline: 2px solid rgba(226, 101, 58, 0.9);
+        outline-offset: 1px;
       }
       .hud-army:hover {
         background: rgba(20, 32, 46, 0.85);
@@ -467,11 +484,44 @@
       .hud-pip.is-dead {
         background: rgba(220, 232, 244, 0.16);
       }
-      .hud-army-verb {
-        display: block;
+      .hud-army-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
         margin-top: 3px;
+      }
+      /* Truncated rather than wrapped, so every row is the same height however
+         long a town's name is — a list you scan for status wants a steady rhythm
+         more than it wants the last few letters of "Harrowgate". */
+      .hud-army-verb {
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
         font-size: 11px;
         opacity: 0.62;
+      }
+      /* Deliberately quiet. Recall is a real order but a rare one, and a button
+         as loud as the row would read as the row's primary action. */
+      .hud-army-recall {
+        flex: none;
+        padding: 2px 8px;
+        border: 1px solid rgba(220, 232, 244, 0.28);
+        border-radius: 5px;
+        background: rgba(220, 232, 244, 0.06);
+        color: inherit;
+        font-size: 10px;
+        line-height: 1.5;
+      }
+      .hud-army-recall:hover:not(:disabled) {
+        border-color: rgba(226, 101, 58, 0.9);
+        background: rgba(226, 101, 58, 0.28);
+      }
+      /* Already home: shown, not hidden, so the row's shape never jumps. */
+      .hud-army-recall:disabled {
+        opacity: 0.28;
+        cursor: default;
       }
       .hud-army-bar {
         display: block;

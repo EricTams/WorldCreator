@@ -429,35 +429,68 @@ export class Hud {
               : a.order === 'return'
                 ? 'Marching home'
                 : `Defending ${home?.name ?? 'home'}`
+        // An army already sitting at home has nowhere to be recalled to.
+        const atHome = a.order === 'idle'
+        // The row is a div rather than a button because it now contains one, and
+        // a button inside a button is invalid markup that browsers resolve by
+        // dropping the inner one. `role`/`tabindex` keep it operable by keyboard.
         return `
-          <button class="hud-army${a.id === this.selectedArmy ? ' is-selected' : ''}" type="button" data-army="${a.id}">
+          <div class="hud-army${a.id === this.selectedArmy ? ' is-selected' : ''}" data-army="${a.id}" role="button" tabindex="0">
             <span class="hud-army-top">
               <span class="hud-army-home">${home?.name ?? 'Army'}</span>
               <span class="hud-army-pips">${pips}</span>
             </span>
-            <span class="hud-army-verb">${verb}</span>
+            <span class="hud-army-foot">
+              <span class="hud-army-verb" title="${verb}">${verb}</span>
+              <button class="hud-army-recall" type="button" ${atHome ? 'disabled' : ''}
+                title="March this army back to ${home?.name ?? 'its city'}">Home</button>
+            </span>
             <span class="hud-army-bar"><span style="width:${strength * 100}%"></span></span>
-          </button>`
+          </div>`
       })
       .join('')
 
     for (const node of this.armies.querySelectorAll('.hud-army')) {
-      const el = node as HTMLButtonElement
+      const el = node as HTMLElement
       const id = Number(el.dataset.army)
-      el.onclick = (e) => {
+
+      const select = (e: Event) => {
         const army = sim.armyById(id)
         if (!army) return
-        // Shift-click recalls, so getting an army home never needs the map.
-        if (e.shiftKey) {
-          this.handlers.onRecall(army)
-          this.selectedArmy = -1
-        } else {
-          this.selectedArmy = this.selectedArmy === id ? -1 : id
-        }
+        // Shift-click still recalls. The button is the discoverable way to do
+        // it; this stays for anyone who already learned the shortcut.
+        if (e instanceof MouseEvent && e.shiftKey) this.recall(army)
+        else this.selectedArmy = this.selectedArmy === id ? -1 : id
         this.armySignature = ''
         this.rebuildT = 0
       }
+
+      el.onclick = select
+      el.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          select(e)
+        }
+      }
+
+      const recall = el.querySelector('.hud-army-recall') as HTMLButtonElement | null
+      if (recall) {
+        recall.onclick = (e) => {
+          // Or the click also lands on the row and selects the army we just
+          // sent home, leaving the map waiting for an order nobody meant to give.
+          e.stopPropagation()
+          const army = sim.armyById(id)
+          if (army) this.recall(army)
+        }
+      }
     }
+  }
+
+  private recall(army: Army): void {
+    this.handlers.onRecall(army)
+    if (this.selectedArmy === army.id) this.selectedArmy = -1
+    this.armySignature = ''
+    this.rebuildT = 0
   }
 
   private showEnd(winner: number): void {
