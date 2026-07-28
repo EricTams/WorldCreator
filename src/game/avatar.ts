@@ -227,6 +227,20 @@ export class Avatar {
     this.carpet.geometry.computeVertexNormals()
   }
 
+  /**
+   * Fly the wizard's own colours.
+   *
+   * The marker flag was always there as a "where am I" affordance; colouring it
+   * to the faction makes it do a second job for free, so the player's own banner
+   * over a captured town is the same colour as the one on their carpet. Both the
+   * cloth and the body take it — at strategy altitude the body is a few pixels
+   * and the flag is what you actually see.
+   */
+  setFactionColor(hex: number): void {
+    ;(this.flag.material as THREE.MeshStandardMaterial).color.setHex(hex)
+    ;(this.body.material as THREE.MeshStandardMaterial).color.setHex(hex)
+  }
+
   setScale(s: number): void {
     this.object.scale.setScalar(s)
   }
@@ -293,6 +307,7 @@ export class Avatar {
     keys: Keyboard,
     frame: TerrainFrame,
     settings: AvatarSettings,
+    speedScale = 1,
   ): boolean {
     const east = keys.axis('KeyA', 'KeyD')
     const north = keys.axis('KeyS', 'KeyW')
@@ -303,7 +318,12 @@ export class Avatar {
     if (moving) {
       // Normalise so diagonals aren't faster than the cardinals.
       this.move.normalize()
-      const speed = settings.fly ? settings.flySpeed : settings.walkSpeed
+      // `speedScale` is the sprint, and it is a parameter rather than a field on
+      // `settings` because it changes every frame with what the player is
+      // holding and how much mana is left — `AvatarSettings` is saved
+      // configuration, and a transient multiplier living there would be a
+      // setting that edits itself.
+      const speed = (settings.fly ? settings.flySpeed : settings.walkSpeed) * speedScale
       this.position.addScaledVector(this.move, speed * dt)
       this.facing = Math.atan2(this.move.x, this.move.z)
     }

@@ -3,9 +3,19 @@ import { Avatar } from './game/avatar'
 import { Keyboard } from './game/input'
 import { createCameraRig, type ViewPreset } from './render/camera'
 import { CardLayer, type CardSpec } from './render/cardLayer'
+import { BoardLayer } from './render/boardLayer'
+import { Effects } from './render/effects'
+import { Banners } from './render/banners'
 import { createScene } from './render/scene'
-import { loadSpriteAtlas } from './render/spriteAtlas'
-import type { SpriteKey } from './render/spriteAtlas'
+import { loadSpriteAtlas, loadUnitAtlas } from './render/spriteAtlas'
+import type { SpriteKey, UnitKey } from './render/spriteAtlas'
+import { Sim, RULES } from './game/sim'
+import type { Army, BuildItem, SiteState } from './game/sim'
+import { Hud } from './ui/hud'
+import { FACTIONS } from './game/factions'
+import { planGameMap } from './world/gameMap'
+import type { MapPlan } from './world/gameMap'
+import { raycastTerrain } from './game/raycast'
 import { TerrainMesh } from './render/terrainMesh'
 import type { TerrainFrame } from './world/terrainQuery'
 import { Compass } from './ui/compass'
@@ -89,6 +99,75 @@ const cards = new CardLayer({ atlas, capacity: CARD_CAPACITY })
 scene.scene.add(cards.object)
 
 /**
+ * The live half of the board.
+ *
+ * Two layers because two atlases, and two atlases because one material binds one
+ * texture. `units` draws creatures from `units.png`; `board` draws the map pieces
+ * that can change — a vein that becomes a mine, a disc that changes colour —
+ * from the same `sprites.png` the static layer uses. Both are rewritten every
+ * frame; see `render/boardLayer.ts` for why that is the cheap option here and
+ * the wrong one for the 180k props above.
+ *
+ * 900 is far more than a match can field: about 150 garrison creatures, six
+ * armies of six, towers, and the loose pickups.
+ */
+const unitAtlas = loadUnitAtlas(scene.renderer.capabilities.getMaxAnisotropy())
+const unitLayer = new BoardLayer<UnitKey>({ atlas: unitAtlas, capacity: 900 })
+const boardLayer = new BoardLayer<SpriteKey>({ atlas, capacity: 400 })
+scene.scene.add(unitLayer.object)
+scene.scene.add(boardLayer.object)
+
+const effects = new Effects()
+scene.scene.add(effects.object)
+
+const banners = new Banners()
+scene.scene.add(banners.object)
+// The player flies their own colours, and every banner they raise matches.
+avatar.setFactionColor(FACTIONS[0].tint)
+
+/**
+ * The match.
+ *
+ * Created once and reset onto each new island rather than rebuilt, so the HUD
+ * can hold a reference to it for the lifetime of the page. Its two callbacks are
+ * the only things it is allowed to reach out and touch: moving the avatar on
+ * respawn (the one time the simulation, rather than the player, decides where
+ * the wizard is) and putting a line of text on screen.
+ */
+const sim = new Sim({
+  onRespawn: (x, z) => {
+    const frame = terrainFrame()
+    if (!frame) return
+    avatar.placeAt(frame, x, z, params.avatar)
+    // A respawn is a teleport, and the camera has to be *moved*, not flown.
+    // `snapFollow` alone is not enough and is the opposite of enough: it sets
+    // the lagged pivot equal to the target, which zeroes the frame's delta, and
+    // the delta is the only thing that ever moves the eye. Snapping without
+    // re-framing therefore pins the camera to wherever the wizard died. Same
+    // pair the Recall button uses.
+    rig.snapFollow()
+    if (params.avatar.followCamera) rig.apply('follow', params.camera)
+  },
+  onMessage: (text) => hud.message(text),
+})
+
+const hud = new Hud(document.body, sim, {
+  onOrder: (army: Army, siteId: number) => sim.orderArmy(army, siteId),
+  onRecall: (army: Army) => sim.recallArmy(army),
+  onBuild: (site: SiteState, item: BuildItem) => {
+    if (!sim.queueBuild(site, item)) hud.message('Not enough gold.')
+  },
+  onConvert: (site: SiteState) => {
+    if (!sim.beginConvert(sim.player, site)) hud.message('Nothing to consecrate here.')
+  },
+  onRestart: () => {
+    params.seed = randomSeed()
+    gui.refreshDisplay()
+    regenerate()
+  },
+})
+
+/**
  * World units per cell of the *current* heightmap.
  *
  * Amplification subdivides the grid after generation, so the render grid can be
@@ -138,13 +217,20 @@ function syncAvatarVisibility(): void {
 
 /**
  * Put the avatar somewhere sensible: keep its XZ if it already has one (so a
- * regenerate doesn't teleport you), otherwise start it at the map centre.
+ * regenerate doesn't teleport you), otherwise start it at its own capital.
+ *
+ * The capital rather than the map centre. The two are close — `cities.ts` hands
+ * the player whichever capital is nearest the origin — but "close" was enough to
+ * drop the wizard inside a *neutral* town's defensive fire on some seeds, and a
+ * hundred hit points against two hunters is about six seconds. Starting on your
+ * own doorstep is also simply what the game means: the match opens at home.
  */
 function settleAvatar(reset: boolean): void {
   const frame = terrainFrame()
   if (!frame) return
-  const x = reset ? 0 : avatar.position.x
-  const z = reset ? 0 : avatar.position.z
+  const home = reset && sim.ready ? sim.player : null
+  const x = home ? home.x : reset ? 0 : avatar.position.x
+  const z = home ? home.z : reset ? 0 : avatar.position.z
   avatar.placeAt(frame, x, z, params.avatar)
 }
 
@@ -296,9 +382,6 @@ function revertErosion(): void {
   updateStatus()
 }
 
-const PLAYER_TINT = 0x4a80c0
-const NEUTRAL_TINT = 0x9aa4ae
-
 /**
  * How wide a settlement is, as a multiple of its town card's width.
  *
@@ -329,6 +412,17 @@ interface WorldPlan {
   field: BiomeField | null
   /** Cities and their villages, in card order. */
   sites: CardSpec[]
+  /** The board: who owns which capital, and where the mines and points are. */
+  game: MapPlan
+  /**
+   * Stand-in cards for the game sites that are *not* cities.
+   *
+   * They are never handed to the static card layer — the dynamic one draws them,
+   * because a vein becomes a mine and a disc changes colour. But they still have
+   * to cut a levelled pad and hold the treeline back, and both of those are
+   * computed from a `CardSpec`, so this is the shape they take to ask for them.
+   */
+  gamePads: CardSpec[]
   /**
    * Capitals whose surroundings stay permanently on the map.
    *
@@ -368,11 +462,26 @@ function planWorld(): WorldPlan | null {
       )
     : null
 
-  const sites: CardSpec[] = cities.map((c) => ({
-    sprite: BIOMES[c.biome].faction as SpriteKey,
+  const game = planGameMap(params.seed, frame, cities, FACTIONS.length)
+
+  // A wizard's capital is drawn with its faction's own castle rather than with
+  // its territory's, so the three seats of power are recognisable on sight.
+  // Neutral towns keep their biome's building — that variety is the map's, and
+  // overriding all fifteen would make the island read as three colours.
+  const capitalSprite = new Map<number, SpriteKey>()
+  for (const site of game.sites) {
+    if (site.kind !== 'city' || site.owner < 0 || site.cityIndex === undefined) continue
+    capitalSprite.set(site.cityIndex, FACTIONS[site.owner].city)
+  }
+
+  const sites: CardSpec[] = cities.map((c, i) => ({
+    sprite: capitalSprite.get(i) ?? (BIOMES[c.biome].faction as SpriteKey),
     x: c.x,
     z: c.z,
-    tint: c.player ? PLAYER_TINT : NEUTRAL_TINT,
+    // Ownership colour is the dynamic layer's job now: it has to change hands
+    // mid-match, and a card in the static layer cannot. Suppressing the disc
+    // here is what stops the two drawing one on top of the other.
+    discRadius: 0,
     // One terrace for the whole village — see `CardSpec.clearing`.
     clearing,
   }))
@@ -396,8 +505,17 @@ function planWorld(): WorldPlan | null {
     })
   }
 
+  const gamePads: CardSpec[] = game.sites
+    .filter((s) => s.sprite !== null)
+    .map((s) => ({
+      sprite: s.sprite as SpriteKey,
+      x: s.x,
+      z: s.z,
+      clearing: s.radius,
+    }))
+
   const owned = cities.filter((c) => c.player).map((c) => ({ x: c.x, z: c.z }))
-  return { cities, field, sites, owned }
+  return { cities, field, sites, game, gamePads, owned }
 }
 
 /**
@@ -454,7 +572,15 @@ function cutSitePads(): void {
   // guarantees the terraces and the towns standing on them agree.
   plan = planWorld()
   if (!plan) return
-  flattenSitePads(current, effectiveCellSize(), cards.padsFor(plan.sites))
+  flattenSitePads(current, effectiveCellSize(), [
+    ...cards.padsFor(plan.sites),
+    ...cards.padsFor(plan.gamePads),
+  ])
+  // A new island is a new match. Erosion moves the coastline and so moves every
+  // capital, which means the board this match was being played on no longer
+  // exists — restarting is the honest answer, not a bug.
+  sim.reset(plan.game)
+  hud.reset()
 }
 
 /**
@@ -485,7 +611,10 @@ function buildCards(): void {
   // Rings first: a site's own clearing gets a denser fringe than open country.
   // Then dress the rest of the island, keeping clear of those clearings.
   const seaY = params.shape.seaLevel * params.render.heightScale
-  const rings = ringDecorations(cards.decoRingsFor(sites), params.seed, field, {
+  // The game sites want a treeline of their own, and want the open scatter kept
+  // out of their clearings — a mine standing in a wood is a mine you cannot see.
+  const clearings = [...cards.decoRingsFor(sites), ...cards.decoRingsFor(plan.gamePads)]
+  const rings = ringDecorations(clearings, params.seed, field, {
     spacing: treeWidth * 1.35,
   }).filter((spot) => terrainHeightAt(frame, spot.x, spot.z) > seaY + 1)
 
@@ -502,7 +631,7 @@ function buildCards(): void {
         {
           spacing: params.render.scatterSpacing,
           blobScale: params.render.scatterBlob,
-          avoid: cards.decoRingsFor(sites),
+          avoid: clearings,
           maxCount: CARD_CAPACITY - sites.length - rings.length,
         },
       )
@@ -569,6 +698,12 @@ function applyCameraParams(): void {
   // camera's own pitch is what presents them undistorted. Tied to the resting
   // pitch rather than set as a constant, so tilting the view keeps them square.
   cards.setTilt(params.camera.recenterPitch)
+  // The live layers have to agree with the static one exactly, or a creature
+  // standing next to a town faces a different way than the town does.
+  for (const layer of [unitLayer, boardLayer]) {
+    layer.setBillboard(!params.camera.lockNorth)
+    layer.setTilt(params.camera.recenterPitch)
+  }
 }
 
 /**
@@ -760,17 +895,31 @@ if (import.meta.env.DEV) {
       touchMode: setTouchMode,
       resetCamera,
       cards,
+      sim,
+      hud,
+      unitLayer,
+      boardLayer,
       scene,
       terrain,
       buildBiomeField,
       /** The placed capitals and their villages, as of the last pad cut. */
       plan: () => plan,
+      /** The current terrain, for driving the sim by hand from the console. */
+      frame: () => terrainFrame(),
+      /** Ground height at a world XZ — what a spell aimed at the map hits. */
+      groundAt: (x: number, z: number) => {
+        const frame = terrainFrame()
+        return frame ? terrainHeightAt(frame, x, z) : 0
+      },
       /** Drop the avatar somewhere — `__world.goto(...__world.plan().cities[3])`. */
       goto: (x: number, z: number) => {
         const frame = terrainFrame()
         if (!frame) return
         avatar.placeAt(frame, x, z, params.avatar)
+        // Re-frame as well as snap — see the respawn callback for why snapping
+        // on its own leaves the camera behind rather than bringing it along.
         rig.snapFollow()
+        if (params.avatar.followCamera) rig.apply('follow', params.camera)
       },
     },
   })
@@ -786,6 +935,8 @@ function onResize(): void {
   // The cards' legibility floor is measured in real pixels, so it has to be
   // re-derived whenever the viewport or the field of view changes.
   cards.setViewport(h, rig.camera.fov)
+  unitLayer.setViewport(h, rig.camera.fov)
+  boardLayer.setViewport(h, rig.camera.fov)
 }
 window.addEventListener('resize', onResize)
 onResize()
@@ -793,6 +944,117 @@ onResize()
 rig.fitToWorld(params.mapSize * params.render.cellSize, params.render.heightScale)
 rig.apply('populous')
 applyCameraParams()
+
+// --- pointing at the world ---------------------------------------------------
+
+/**
+ * Where on the ground the player just clicked.
+ *
+ * The ray comes from the camera through the pointer; the intersection is
+ * `raycastTerrain`'s heightfield march rather than three's triangle raycaster,
+ * for the reason given there — the terrain is millions of triangles and this is
+ * on the click path.
+ */
+const pickRay = new THREE.Raycaster()
+const pickNdc = new THREE.Vector2()
+
+function pickGround(clientX: number, clientY: number): { x: number; y: number; z: number } | null {
+  const frame = terrainFrame()
+  if (!frame) return null
+  const rect = scene.renderer.domElement.getBoundingClientRect()
+  pickNdc.set(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
+  )
+  pickRay.setFromCamera(pickNdc, rig.camera)
+  const o = pickRay.ray.origin
+  const d = pickRay.ray.direction
+  return raycastTerrain(frame, o.x, o.y, o.z, d.x, d.y, d.z)
+}
+
+/**
+ * A click on the world, as opposed to a drag of the camera.
+ *
+ * OrbitControls owns the same button, so this cannot consume the event — it
+ * watches instead, and only treats a press as a click if the pointer barely
+ * moved and was not held. The tiny orbit nudge a "click" also produces is well
+ * under a pixel and nobody has ever noticed it.
+ */
+let pressX = 0
+let pressY = 0
+let pressT = 0
+
+const canvas = scene.renderer.domElement
+canvas.addEventListener('pointerdown', (e) => {
+  pressX = e.clientX
+  pressY = e.clientY
+  pressT = performance.now()
+})
+
+canvas.addEventListener('pointerup', (e) => {
+  if (Hud.isHudTarget(e.target)) return
+  if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > 6) return
+  if (performance.now() - pressT > 450) return
+  if (sim.winner >= 0) return
+
+  const hit = pickGround(e.clientX, e.clientY)
+  if (!hit) return
+
+  // An army is waiting for a target: this click is its order, not a spell.
+  if (hud.selectedArmy >= 0) {
+    const army = sim.armyById(hud.selectedArmy)
+    hud.selectedArmy = -1
+    if (!army) return
+    const target = nearestExploredSite(hit.x, hit.z)
+    if (target) {
+      sim.orderArmy(army, target.id)
+      hud.message(`Marching on ${target.name}.`)
+    } else {
+      hud.message('No known site there. Armies march to places, not to points.')
+    }
+    return
+  }
+
+  castAtGround(hit)
+})
+
+/**
+ * The nearest site to a map click that the player has actually seen.
+ *
+ * Orders are given to *places*, not to coordinates — that is the full doc's
+ * command model, and it is also what makes a click forgiving: nobody can hit a
+ * 40-unit pad from two thousand units up, so the click means "that one" and this
+ * works out which. The fog check is what stops an army being sent to a lair
+ * nobody has discovered.
+ */
+function nearestExploredSite(x: number, z: number): SiteState | null {
+  const fogOn = params.fog.enabled && !params.fog.revealAll
+  let best: SiteState | null = null
+  let bestD = 320
+  for (const site of sim.sites) {
+    if (fogOn && fogGrid.exploredAt(site.x, site.z) < 0.18) continue
+    const d = Math.hypot(site.x - x, site.z - z)
+    if (d < bestD) {
+      bestD = d
+      best = site
+    }
+  }
+  return best
+}
+
+function castAtGround(hit: { x: number; y: number; z: number }): void {
+  const w = sim.player
+  if (w.dead) return
+  if (!sim.inFireballRange(w, hit.x, hit.z)) {
+    hud.message('Out of range — fly closer.')
+    return
+  }
+  if (w.mana < RULES.fireball.mana) {
+    hud.message('Not enough mana.')
+    return
+  }
+  sim.castFireball(w, hit.x, hit.z, hit.y + 1)
+}
 
 const clock = new THREE.Clock()
 
@@ -802,9 +1064,35 @@ scene.renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1)
 
   const frame = terrainFrame()
-  if (frame && params.avatar.enabled) {
-    avatar.update(dt, keys, frame, params.avatar)
+  const playing = sim.ready && sim.winner < 0
+  const wizard = sim.ready ? sim.player : null
+
+  // Sprint. Mana is the throttle rather than a cooldown, which makes the wizard's
+  // one resource pay for both getting somewhere and doing something when it
+  // arrives — the choice the full doc's boost charges would eventually make
+  // properly, standing in for skiing until there is skiing.
+  let speedScale = 1
+  if (wizard && playing && !wizard.dead && keys.isDown('ShiftLeft') && wizard.mana > 0) {
+    speedScale = RULES.wizard.sprint
+    wizard.mana = Math.max(0, wizard.mana - RULES.wizard.sprintDrain * dt)
+  }
+
+  // A dead wizard is off the board: it cannot be driven, and the body should not
+  // be standing in the field it just died in.
+  const frozen = wizard?.dead ?? false
+  avatar.object.visible = params.avatar.enabled && !frozen
+
+  if (frame && params.avatar.enabled && !frozen) {
+    avatar.update(dt, keys, frame, params.avatar, speedScale)
     avatar.updateMarkerVisibility(rig.camera)
+  }
+
+  if (frame && sim.ready) {
+    sim.update(dt, frame, avatar.position.x, avatar.position.z, avatar.position.y)
+    const fogOn = params.fog.enabled && !params.fog.revealAll
+    sim.draw(unitLayer, boardLayer, banners, frame, fogOn ? (x, z) => fogGrid.exploredAt(x, z) : () => 1)
+    effects.update(sim.projectiles, sim.blasts)
+    hud.update(dt)
   }
 
   if (frame && params.fog.enabled && !params.fog.revealAll) {
@@ -831,6 +1119,26 @@ scene.renderer.setAnimationLoop(() => {
   }
 
   if (keys.consumePress('KeyC')) resetCamera()
+
+  // E consecrates whatever the wizard is standing on. A key as well as the
+  // on-screen button because the button is under the cursor's usual resting
+  // place and clicking it should never be the only way in.
+  if (keys.consumePress('KeyE') && wizard && playing && !wizard.dead) {
+    const under = sim.siteUnder(wizard)
+    if (under && sim.canConvert(wizard, under)) sim.beginConvert(wizard, under)
+    else if (under) hud.message(`${under.name} is still defended.`)
+  }
+
+  // F throws a fireball straight ahead, for playing without a mouse. It aims at
+  // the middle of the screen, which is where the camera is already looking.
+  if (keys.consumePress('KeyF') && playing) {
+    const rect = scene.renderer.domElement.getBoundingClientRect()
+    const hit = pickGround(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    if (hit) castAtGround(hit)
+  }
+
+  if (keys.consumePress('Escape')) hud.selectedArmy = -1
+
   keys.endFrame()
 
   rig.update(dt, params.camera)

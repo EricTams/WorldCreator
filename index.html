@@ -253,6 +253,372 @@
         }
       }
 
+      /* --- Game HUD -------------------------------------------------------
+         The match, over the map. The wrapper itself never catches the pointer —
+         a click that misses a button is a click on the world, and throwing a
+         fireball must not be blocked by an invisible full-screen div. Only the
+         controls opt back in with pointer-events: auto. */
+      .hud {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        pointer-events: none;
+        color: #dce8f4;
+        font-size: 12px;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .hud button {
+        pointer-events: auto;
+        font: inherit;
+        cursor: pointer;
+      }
+      /* `hidden` has to beat the layout rules below. The attribute's own
+         `display: none` comes from the UA stylesheet at element specificity, so
+         any class here that sets `display` silently overrides it — which is how
+         the end-of-match overlay ended up covering a live match. */
+      .hud [hidden] {
+        display: none !important;
+      }
+      .hud kbd {
+        padding: 1px 5px;
+        border: 1px solid rgba(220, 232, 244, 0.35);
+        border-radius: 4px;
+        font-size: 10px;
+        font-family: inherit;
+        opacity: 0.8;
+      }
+
+      /* The charge race. Top centre, because it is the clock everyone is
+         playing against and it should never be somewhere you have to look. */
+      .hud-charge {
+        position: absolute;
+        left: 50%;
+        top: calc(10px + env(safe-area-inset-top));
+        transform: translateX(-50%);
+        min-width: 300px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.55);
+        font-variant-numeric: tabular-nums;
+      }
+      .hud-charge-row {
+        display: grid;
+        grid-template-columns: 76px 1fr 38px 44px;
+        align-items: center;
+        gap: 8px;
+        padding: 2px 0;
+        opacity: 0.75;
+      }
+      .hud-charge-row.is-you {
+        opacity: 1;
+        font-weight: 600;
+      }
+      .hud-charge-bar {
+        height: 6px;
+        border-radius: 3px;
+        background: rgba(220, 232, 244, 0.14);
+        overflow: hidden;
+      }
+      .hud-charge-bar > span {
+        display: block;
+        height: 100%;
+        transition: width 240ms linear;
+      }
+      .hud-charge-num {
+        text-align: right;
+      }
+      .hud-charge-points {
+        letter-spacing: 1px;
+        opacity: 0.7;
+      }
+
+      .hud-toast {
+        position: absolute;
+        left: 50%;
+        top: calc(96px + env(safe-area-inset-top));
+        transform: translateX(-50%);
+        padding: 7px 14px;
+        border-radius: 6px;
+        background: rgba(226, 101, 58, 0.9);
+        color: #fff;
+        white-space: nowrap;
+      }
+
+      /* Army roster, right edge, sorted by distance to the wizard. */
+      .hud-armies {
+        position: absolute;
+        right: calc(10px + env(safe-area-inset-right));
+        top: 50%;
+        transform: translateY(-50%);
+        width: 194px;
+        max-height: 70vh;
+        overflow-y: auto;
+        pointer-events: auto;
+      }
+      .hud-armies-head {
+        padding: 0 4px 5px;
+        font-size: 10px;
+        letter-spacing: 1.4px;
+        text-transform: uppercase;
+        opacity: 0.5;
+      }
+      .hud-armies-empty {
+        padding: 9px 10px;
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.5);
+        opacity: 0.6;
+        line-height: 1.45;
+      }
+      .hud-army {
+        display: block;
+        width: 100%;
+        margin-bottom: 5px;
+        padding: 7px 9px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.55);
+        color: inherit;
+        text-align: left;
+        transition: background-color 120ms ease, border-color 120ms ease;
+      }
+      .hud-army:hover {
+        background: rgba(20, 32, 46, 0.85);
+      }
+      .hud-army.is-selected {
+        border-color: rgba(226, 101, 58, 0.9);
+        background: rgba(40, 26, 20, 0.9);
+      }
+      .hud-army-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+      }
+      .hud-army-home {
+        font-weight: 600;
+      }
+      .hud-army-pips {
+        display: flex;
+        gap: 2px;
+      }
+      .hud-pip {
+        width: 5px;
+        height: 9px;
+        border-radius: 1px;
+        background: #7fc27a;
+      }
+      .hud-pip.is-bearer {
+        background: #d8c463;
+      }
+      .hud-pip.is-dead {
+        background: rgba(220, 232, 244, 0.16);
+      }
+      .hud-army-verb {
+        display: block;
+        margin-top: 3px;
+        font-size: 11px;
+        opacity: 0.62;
+      }
+      .hud-army-bar {
+        display: block;
+        height: 3px;
+        margin-top: 5px;
+        border-radius: 2px;
+        background: rgba(220, 232, 244, 0.14);
+        overflow: hidden;
+      }
+      .hud-army-bar > span {
+        display: block;
+        height: 100%;
+        background: #7fc27a;
+      }
+
+      /* Everything that answers "what can I do right now", stacked above the
+         status bar so the two never overlap. */
+      .hud-bottom {
+        position: absolute;
+        left: 50%;
+        bottom: calc(16px + env(safe-area-inset-bottom));
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+      }
+      .hud-prompt {
+        text-align: center;
+      }
+      .hud-prompt-note {
+        padding: 5px 11px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.55);
+        opacity: 0.8;
+      }
+      .hud-action {
+        padding: 8px 16px;
+        border: 1px solid rgba(226, 101, 58, 0.85);
+        border-radius: 7px;
+        background: rgba(226, 101, 58, 0.22);
+        color: #fff;
+      }
+      .hud-action:hover {
+        background: rgba(226, 101, 58, 0.42);
+      }
+      .hud-channel {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 7px 13px;
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.62);
+      }
+      .hud-channel-bar,
+      .hud-queue-bar {
+        display: block;
+        width: 140px;
+        height: 6px;
+        border-radius: 3px;
+        background: rgba(220, 232, 244, 0.14);
+        overflow: hidden;
+      }
+      .hud-channel-bar > span,
+      .hud-queue-bar > span {
+        display: block;
+        height: 100%;
+        background: #e2653a;
+      }
+
+      .hud-city {
+        padding: 8px 11px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.62);
+        text-align: center;
+      }
+      .hud-city-name {
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      .hud-build-row,
+      .hud-queue {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+      }
+      .hud-build {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 6px 12px;
+        border: 1px solid rgba(220, 232, 244, 0.24);
+        border-radius: 6px;
+        background: rgba(220, 232, 244, 0.06);
+        color: inherit;
+      }
+      .hud-build:hover:not(:disabled) {
+        background: rgba(220, 232, 244, 0.16);
+      }
+      .hud-build:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+      .hud-build span {
+        font-size: 10px;
+        opacity: 0.65;
+      }
+      .hud-queue-time {
+        font-variant-numeric: tabular-nums;
+        opacity: 0.7;
+      }
+
+      .hud-vitals {
+        display: grid;
+        grid-template-columns: 150px auto 150px auto auto;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.55);
+        font-variant-numeric: tabular-nums;
+      }
+      .hud-bar {
+        height: 9px;
+        border-radius: 5px;
+        background: rgba(220, 232, 244, 0.14);
+        overflow: hidden;
+      }
+      .hud-bar > span {
+        display: block;
+        height: 100%;
+        transition: width 120ms linear;
+      }
+      .hud-bar-hp > span {
+        background: #d1544a;
+      }
+      .hud-bar-mana > span {
+        background: #4a90d1;
+      }
+      .hud-bar-label {
+        opacity: 0.7;
+      }
+      .hud-gold {
+        padding-left: 8px;
+        border-left: 1px solid rgba(220, 232, 244, 0.16);
+        color: #e8c96a;
+      }
+
+      .hud-end {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(6, 10, 15, 0.82);
+        pointer-events: auto;
+      }
+      .hud-end-card {
+        max-width: 30em;
+        padding: 28px 34px;
+        border: 1px solid rgba(220, 232, 244, 0.18);
+        border-radius: 12px;
+        background: rgba(10, 16, 23, 0.95);
+        text-align: center;
+      }
+      .hud-end-title {
+        font-size: 20px;
+        font-weight: 600;
+      }
+      .hud-end-note {
+        margin: 10px 0 20px;
+        opacity: 0.7;
+        line-height: 1.55;
+      }
+
+      /* On a phone the roster and the build menu are the first things to go —
+         the d-pad owns the bottom right, and a 194px panel over a 2 km island
+         on a 5 inch screen is most of the map. Vitals and the charge race stay:
+         they are the two things you cannot play without. */
+      body.is-touch .hud-armies {
+        width: 138px;
+        font-size: 11px;
+      }
+      /* Clear of the credit line, which keeps its corner on every screen. */
+      body.is-touch .hud-bottom {
+        left: 12px;
+        bottom: calc(70px + env(safe-area-inset-bottom));
+        transform: none;
+        align-items: flex-start;
+      }
+      body.is-touch .hud-vitals {
+        grid-template-columns: 92px auto 92px auto;
+      }
+      body.is-touch .hud-gold {
+        grid-column: 1 / -1;
+        padding: 0;
+        border: 0;
+      }
+
       #status {
         position: fixed;
         left: 12px;
