@@ -20,7 +20,16 @@ import { makeRng } from './prng'
 import type { TerrainFrame } from './terrainQuery'
 import { terrainHeightAt, terrainSlopeAt, worldHalfExtent } from './terrainQuery'
 
-export type SiteKind = 'city' | 'mine' | 'lair' | 'point'
+export type SiteKind = 'city' | 'mine' | 'lair' | 'point' | 'node'
+
+/**
+ * The three connection resources.
+ *
+ * A node is never consecrated — a caravan's arrival is what claims it — so the
+ * kind is carried here rather than being inferred from the sprite: the buff a
+ * link grants is a rule, and rules should not be read off artwork.
+ */
+export type ResourceKind = 'mithril' | 'horse' | 'granary'
 
 /** Which faction owns something. -1 is nobody. */
 export type Owner = number
@@ -51,6 +60,8 @@ export interface MapSite {
   cache?: number
   /** Index into `cities` for a city site, so the two lists can be rejoined. */
   cityIndex?: number
+  /** Resource nodes only: which buff a live caravan link grants. */
+  resource?: ResourceKind
 }
 
 export interface MapPlan {
@@ -196,6 +207,28 @@ const LAIR_NAMES = [
   'Serpent Hollow',
   'Cyclops Crag',
   'The Barrow Field',
+]
+
+/**
+ * The six resource nodes: two each of three kinds, interleaved.
+ *
+ * Interleaved rather than grouped because `spread` walks the candidate list in
+ * order, so a grouped list would put both Mithril seams in the same quarter of
+ * the island and make which node a wizard can reach a matter of where they
+ * happened to start.
+ */
+const NODES: {
+  resource: ResourceKind
+  name: string
+  sprite: string
+  ownedSprite?: string
+}[] = [
+  { resource: 'mithril', name: 'The Mithril Seam', sprite: 'vein.ore', ownedSprite: 'mine.orePit' },
+  { resource: 'horse', name: 'The Horse Plains', sprite: 'misc.stables' },
+  { resource: 'granary', name: 'The Long Granary', sprite: 'mine.windMill' },
+  { resource: 'mithril', name: 'Deepdelve', sprite: 'vein.ore', ownedSprite: 'mine.orePit' },
+  { resource: 'horse', name: 'Wildmane Steppe', sprite: 'misc.stables' },
+  { resource: 'granary', name: 'Goldsheaf', sprite: 'mine.windMill' },
 ]
 
 const POINT_NAMES = [
@@ -371,6 +404,29 @@ export function planGameMap(
       name: LAIR_NAMES[k % LAIR_NAMES.length],
       sprite: LAIR_SPRITES[k % LAIR_SPRITES.length],
       cache: 100 + Math.floor(rng() * 200),
+    })
+  })
+
+  // --- resource nodes --------------------------------------------------------
+  //
+  // Before the mines, so the nodes get the better of the leftover ground: a mine
+  // is worth gold and nothing else, while a node is worth an army-wide buff and
+  // is meant to be somewhere a wizard will fight over.
+  const nodeSpots = spread(cands, taken, NODES.length, 165)
+  nodeSpots.forEach((spot, k) => {
+    const def = NODES[k % NODES.length]
+    sites.push({
+      id: nextId++,
+      kind: 'node',
+      x: spot.x,
+      z: spot.z,
+      owner: NOBODY,
+      garrison: 'node',
+      radius: 34,
+      name: def.name,
+      sprite: def.sprite,
+      ownedSprite: def.ownedSprite,
+      resource: def.resource,
     })
   })
 

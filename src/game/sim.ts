@@ -1,11 +1,15 @@
 import type { TerrainFrame } from '../world/terrainQuery'
 import { terrainHeightAt } from '../world/terrainQuery'
-import type { MapPlan, MapSite, Owner } from '../world/gameMap'
+import type { MapPlan, MapSite, Owner, ResourceKind } from '../world/gameMap'
 import { NOBODY } from '../world/gameMap'
 import { ANIM_FPS, ARCHETYPE, FACTIONS, GARRISONS, NEUTRAL_TINT, UNIT_ANIM } from './factions'
 import type { AnimName, UnitDef } from './factions'
+import { MAX_TIER, RULES, TIER_NAMES } from './rules'
+import type { BuildItem } from './rules'
+import { flyAi } from './ai'
 import type { BoardLayer } from '../render/boardLayer'
 import type { Banners } from '../render/banners'
+import type { SiegeEngines } from '../render/siege'
 import type { SpriteKey, UnitKey } from '../render/spriteAtlas'
 
 /**
@@ -23,102 +27,6 @@ import type { SpriteKey, UnitKey } from '../render/spriteAtlas'
  * simulation that also moved the player would be fighting the input for control
  * of the same variable.
  */
-
-// --- tuning ------------------------------------------------------------------
-
-/**
- * Every number the match is played on, in one table.
- *
- * This is `docs/first-playable.md` §10. Kept together deliberately: these are
- * first-tuning values chosen to be *consistent* rather than correct, and they
- * are meaningless individually — fireball damage only means something against
- * the unit HP it is aimed at, and mana regen only means something against the
- * fireball cost. Tuning is editing this block, not hunting through the systems.
- */
-export const RULES = {
-  wizard: {
-    hp: 100,
-    /** HP per second, inside friendly territory only. */
-    regen: 3,
-    respawn: 15,
-    mana: 100,
-    manaRegen: 2,
-    /** Extra mana regen per shrine held, and per Point of Power held. */
-    manaPerShrine: 1,
-    manaPerPoint: 3,
-    sprint: 1.5,
-    sprintDrain: 4,
-  },
-  fireball: {
-    mana: 15,
-    cooldown: 1.5,
-    damage: 30,
-    radius: 6,
-    speed: 25,
-  },
-  /**
-   * How far the wizard can reach with anything, in world units.
-   *
-   * One number for the whole spellbook rather than one per spell: the wizard's
-   * reach is a property of the wizard, and two spells with two different ranges
-   * would need two different indicators drawn around them.
-   *
-   * About twice the height the carpet rides at, which is what makes it legible
-   * on screen — the wizard's own hover is the only length the player has an
-   * intuition for. Written as a distance rather than derived from `hover`,
-   * deliberately: tuning the ride height is a look change, and it must not
-   * silently retune what the wizard can hit.
-   */
-  castRange: 15,
-  convert: {
-    /** Seconds of channel. The wizard is grounded and any hit interrupts. */
-    time: 10,
-  },
-  army: {
-    /** March speed. The wizard's 17 m/s is a little over four times this. */
-    march: 4,
-    /**
-     * How far from its anchor a unit will chase before breaking off.
-     *
-     * Small, so an army stays a body rather than dissolving into a skirmish
-     * line spread over a hundred units. It is the reason a fight is one thing
-     * you can look at instead of six duels in different postcodes.
-     */
-    leash: 22,
-    /**
-     * How far a unit looks for something to fight.
-     *
-     * The single most important number for how combat *reads*. At 90 an army
-     * and a garrison locked on to each other from two town-widths apart — well
-     * outside the frame at the follow camera — so battles began and often ended
-     * without ever being on screen. At 32 the two sides have to be close enough
-     * that the player watching their wizard can see both.
-     *
-     * Comfortably above the 16-unit ranged reach, so archers still open fire as
-     * they close rather than walking into contact first.
-     */
-    aggro: 32,
-  },
-  city: {
-    income: 10 / 60,
-    /** Cost, seconds, of each queue item. */
-    build: {
-      army: { gold: 100, time: 60, label: 'Train Army' },
-      fort: { gold: 150, time: 90, label: 'Fort' },
-      shrine: { gold: 100, time: 60, label: 'Shrine' },
-    },
-  },
-  mine: { income: 15 / 60 },
-  startingGold: 150,
-  /** Seconds for a cleared neutral garrison to come back. */
-  garrisonRegen: 300,
-  /** Seconds for a held Point of Power to regrow its guard for its owner. */
-  pointRegen: 180,
-  /** Charge percent per second, per held point: 1% per 12 s. */
-  chargePerPoint: 1 / 12,
-} as const
-
-export type BuildItem = keyof typeof RULES.city.build
 
 // --- entities ----------------------------------------------------------------
 
@@ -143,6 +51,11 @@ export interface SimUnit {
   armyId: number
   /** A fort tower: drawn from the board atlas, and it never moves. */
   tower: boolean
+  /**
+   * A caravan wagon: drawn from the board atlas, and driven by its caravan
+   * rather than by the combat loop. It has no weapon and never picks a fight.
+   */
+  wagon: boolean
   target: SimUnit | null
   targetWizard: Wizard | null
 }
@@ -161,19 +74,60 @@ export interface Army {
   az: number
   /** True while any of its units is in contact — the anchor stops to let it fight. */
   fighting: boolean
+  /**
+   * Connection-resource multipliers, refreshed every tick from the home city's
+   * live links. Cached on the army rather than looked up per unit per frame,
+   * and read straight through so that cutting a caravan takes effect on the
+   * next swing rather than the next battle.
+   */
+  damageMul: number
+  marchMul: number
+}
+
+/**
+ * A trade link, and the wagon that is the link.
+ *
+ * The buff is not stored anywhere — it is computed from the caravans that are
+ * alive, which is what makes severing one instant and total. There is no state
+ * to forget to clear.
+ */
+export interface Caravan {
+  id: number
+  owner: Owner
+  homeSiteId: number
+  nodeSiteId: number
+  unit: SimUnit
+  /** False while walking out for the first time; true once the link is up. */
+  live: boolean
+  /** Which end of the route it is walking towards. */
+  toNode: boolean
 }
 
 export interface SiteState extends MapSite {
   defenders: SimUnit[]
   /** Counts up while cleared and unclaimed, until the garrison comes back. */
   regenT: number
+  /**
+   * Village, Town or City. Cities only, and it survives capture — taking a
+   * developed city takes the development with it, which is what makes an
+   * enemy capital the biggest prize on the board.
+   */
+  tier: number
   /** Cities only. */
   fort: boolean
   shrine: boolean
-  queue: { item: BuildItem; remaining: number; total: number } | null
+  market: boolean
+  siegeWorks: boolean
+  queue: {
+    item: BuildItem
+    remaining: number
+    total: number
+    /** Caravans only: the node this one was commissioned for. */
+    targetId: number
+    /** Caravans only: the build is done and the queue is held for the journey. */
+    travelling: boolean
+  } | null
   army: Army | null
-  /** Set once a fort's towers are down and want rebuilding for the owner. */
-  towerT: number
 }
 
 export interface Wizard {
@@ -252,6 +206,43 @@ const FORMATION: [number, number][] = [
   [-6.5, 0],
 ]
 
+/**
+ * The caravan wagon.
+ *
+ * A bearer with a cart: no damage, no reach, and slower than a marching army.
+ * Sixty health means anything hostile kills it in seconds, which is the whole
+ * design — a link is a promise that a road stays safe.
+ */
+const WAGON_DEF: UnitDef = {
+  ...ARCHETYPE.bearer,
+  sprite: 'unit.castle.peasant' as UnitKey,
+  name: 'Caravan',
+  hp: RULES.caravan.hp,
+  speed: RULES.caravan.speed,
+}
+
+/**
+ * The trebuchet.
+ *
+ * Drawn by `render/siege.ts` as generated geometry rather than from an atlas —
+ * there is no siege art in the pack — so the sprite here is a placeholder that
+ * is never sampled, the same arrangement fort towers use.
+ */
+const TREBUCHET_DEF: UnitDef = {
+  ...ARCHETYPE.siege,
+  sprite: 'unit.castle.peasant' as UnitKey,
+  name: 'Trebuchet',
+}
+
+/**
+ * The build menu, in the order it is offered.
+ *
+ * Army first because it is what a city is usually for, then growth, then the
+ * buildings. `repair` is deliberately absent: it is never chosen, only
+ * auto-queued when a damaged city has nothing better to do.
+ */
+const MENU_ORDER: BuildItem[] = ['army', 'tier', 'fort', 'shrine', 'market', 'caravan', 'siegeWorks', 'trebuchet']
+
 /** Two towers, either side of the pad. */
 const TOWER_OFFSETS: [number, number][] = [
   [-0.55, -0.35],
@@ -266,6 +257,7 @@ export class Sim {
   projectiles: Projectile[] = []
   blasts: Blast[] = []
   pickups: Pickup[] = []
+  caravans: Caravan[] = []
 
   /** Faction index of the winner, or -1 while the match is live. */
   winner = -1
@@ -276,6 +268,7 @@ export class Sim {
   private opts: SimOptions
   private nextUnitId = 1
   private nextArmyId = 1
+  private nextCaravanId = 1
   private slowT = 0
   /** Site ids with something hostile nearby, refreshed on the slow tick. */
   private hot = new Set<number>()
@@ -307,22 +300,32 @@ export class Sim {
    * being played on no longer exists.
    */
   reset(plan: MapPlan): void {
+    const capitals = new Set(plan.capitals)
     this.sites = plan.sites.map((s) => ({
       ...s,
       defenders: [],
       regenT: 0,
+      // A wizard's capital opens at Town. Charging every wizard ninety seconds
+      // of queue before the game can start would tax the one part of the first
+      // playable that already works — the opening. Everything else, including
+      // every neutral town waiting to be captured, starts as a Village: a
+      // foothold is a foothold, and growing it is the investment.
+      tier: capitals.has(s.id) ? 2 : 1,
       fort: false,
       shrine: false,
+      market: false,
+      siegeWorks: false,
       queue: null,
       army: null,
-      towerT: 0,
     }))
     this.units = []
     this.armies = []
     this.projectiles = []
     this.blasts = []
     this.pickups = []
+    this.caravans = []
     this.nextUnitId = 1
+    this.nextCaravanId = 1
     this.nextArmyId = 1
     this.winner = -1
     this.elapsed = 0
@@ -376,6 +379,7 @@ export class Sim {
       siteId: -1,
       armyId: -1,
       tower: false,
+      wagon: false,
       target: null,
       targetWizard: null,
     }
@@ -408,6 +412,22 @@ export class Sim {
     }
   }
 
+  /**
+   * Put a fort's towers back, whole.
+   *
+   * The same call finishes a new Fort and completes a Repair, because "a fort
+   * has two undamaged towers" is one fact and deserves one implementation. The
+   * old towers are removed outright rather than killed — a repaired wall must
+   * not play a death animation on its way to being fixed.
+   */
+  private repairTowers(site: SiteState): void {
+    if (!site.fort || site.owner < 0) return
+    const old = site.defenders.filter((u) => u.tower)
+    site.defenders = site.defenders.filter((u) => !u.tower)
+    this.units = this.units.filter((u) => !old.includes(u))
+    this.spawnTowers(site)
+  }
+
   // --- queries ---------------------------------------------------------------
 
   /** Nothing left alive defending it. The precondition for consecrating. */
@@ -415,11 +435,29 @@ export class Sim {
     return site.defenders.every((u) => u.dead)
   }
 
+  /**
+   * A site this wizard would consecrate if it were standing on it.
+   *
+   * `canConvert` without the range test, and it exists so that "is this worth
+   * flying to" and "may I claim this" can never disagree. An AI that answers
+   * those two questions with two different rules flies somewhere it will never
+   * be allowed to claim and hovers there — which is exactly how an AI wizard
+   * once spent fourteen minutes standing on a cleared mine.
+   */
+  canClaim(w: Wizard, site: SiteState): boolean {
+    if (site.kind === 'lair') return false
+    // A resource node is claimed by a caravan arriving, never by the wizard.
+    // It is the one place the identity sentence is extended rather than obeyed:
+    // armies destroy defenses, *caravans claim nodes*, the wizard claims the
+    // rest — and it is what gives a caravan a job nothing else can do.
+    if (site.kind === 'node') return false
+    if (site.owner === w.faction) return false
+    return this.isCleared(site)
+  }
+
   /** Can this wizard start a consecration here, right now? */
   canConvert(w: Wizard, site: SiteState): boolean {
-    if (site.kind === 'lair') return false
-    if (site.owner === w.faction) return false
-    if (!this.isCleared(site)) return false
+    if (!this.canClaim(w, site)) return false
     // The same reach as any other spell. It used to be the site's own pad
     // radius, which meant a wizard could consecrate a city from 48 units out —
     // further than it can throw a fireball, and far enough that "claiming" did
@@ -448,10 +486,29 @@ export class Sim {
     return army.units.filter((u) => !u.dead)
   }
 
+  /** Is this army escorting a living siege engine? */
+  static hasSiege(army: Army): boolean {
+    return army.units.some((u) => !u.dead && u.def.role === 'siege')
+  }
+
+  /** Give a city's waiting army its engine. */
+  private attachTrebuchet(site: SiteState): void {
+    const army = site.army
+    if (!army) return
+    const [ox, oz] = FORMATION[army.units.length % FORMATION.length]
+    const u = this.spawnUnit(TREBUCHET_DEF, site.owner, army.ax + ox, army.az + oz)
+    u.armyId = army.id
+    army.units.push(u)
+  }
+
   static armyStrength(army: Army): number {
     let hp = 0
     let max = 0
     for (const u of army.units) {
+      // The engine is not part of the army's establishment: reconstitution
+      // neither prices it nor replaces it, so counting it here would quietly
+      // discount every rebuild for anyone escorting one.
+      if (u.def.role === 'siege') continue
       hp += Math.max(0, u.hp)
       max += u.def.hp
     }
@@ -540,38 +597,117 @@ export class Sim {
   }
 
   /**
-   * Put something in a city's queue.
+   * Which items this city can offer, in menu order.
    *
-   * Gold is taken at commission rather than on completion, so a queued item can
-   * never fail at the last second because the wizard spent the money elsewhere —
-   * and so the cost is visible at the moment the choice is made.
+   * Derived from the tier rather than listed in the HUD, because the tier ladder
+   * only means anything if it is the single place that decides what a city can
+   * do. A menu that kept its own list would eventually disagree with the rule
+   * the AI plays by, and the disagreement would be invisible.
    */
-  queueBuild(site: SiteState, item: BuildItem): boolean {
-    if (site.kind !== 'city' || site.owner < 0 || site.queue) return false
-    const w = this.wizards[site.owner]
-    const spec = RULES.city.build[item]
-    if (item === 'fort' && site.fort) return false
-    if (item === 'shrine' && site.shrine) return false
+  buildOptions(site: SiteState): BuildItem[] {
+    if (site.kind !== 'city') return []
+    return MENU_ORDER.filter((item) => site.tier >= RULES.city.build[item].tier)
+  }
 
-    // Widened deliberately: `RULES` is `as const` so the table reads as data
-    // rather than as something a system can quietly reassign, which makes every
-    // number in it a literal type. These two are about to be scaled.
-    let gold: number = spec.gold
-    let time: number = spec.time
+  /** What an item costs *at this city, right now* — the scaled price, not the table's. */
+  buildSpec(site: SiteState, item: BuildItem): { gold: number; time: number; label: string } {
+    const spec = RULES.city.build[item]
+    if (item === 'tier') {
+      const up = RULES.city.tierUp[site.tier - 1]
+      if (!up) return { gold: 0, time: 0, label: 'Tier Up' }
+      return { gold: up.gold, time: up.time, label: `Grow to ${TIER_NAMES[site.tier + 1]}` }
+    }
     if (item === 'army' && site.army) {
       // Reconstituting costs what was lost, not what a new army costs. An army
       // that walked home with one casualty should not be worth razing and
       // rebuilding, which a flat price would make it.
       const missing = 1 - Sim.armyStrength(site.army)
-      if (missing < 0.02) return false
-      gold = Math.max(25, Math.round(spec.gold * missing))
-      time = Math.max(15, Math.round(spec.time * missing))
+      // A Granary link is the "war-torn city" buff: it does nothing for a city
+      // whose army is whole, and a great deal for the one that keeps losing it.
+      const granary = this.linkedTo(site.id, 'granary') ? RULES.node.granaryRecon : 1
+      return {
+        gold: Math.max(25, Math.round(spec.gold * missing * granary)),
+        time: Math.max(15, Math.round(spec.time * missing * granary)),
+        label: 'Reconstitute',
+      }
     }
-    if (w.gold < gold) return false
+    return { gold: spec.gold, time: spec.time, label: spec.label }
+  }
 
-    w.gold -= gold
-    site.queue = { item, remaining: time, total: time }
+  /**
+   * Why this item cannot be commissioned here, or null if it can.
+   *
+   * One function answers both "may the AI do this" and "is the button dead",
+   * and the reason it returns is the text the button shows. Two copies of this
+   * logic is how a HUD ends up offering something the sim refuses.
+   */
+  buildBlocked(site: SiteState, item: BuildItem): string | null {
+    if (site.kind !== 'city' || site.owner < 0) return 'Not yours'
+    if (site.tier < RULES.city.build[item].tier) return 'Too small'
+    if (item === 'fort' && site.fort) return 'Built'
+    if (item === 'shrine' && site.shrine) return 'Built'
+    if (item === 'market' && site.market) return 'Built'
+    if (item === 'siegeWorks' && site.siegeWorks) return 'Built'
+    if (item === 'tier' && site.tier >= MAX_TIER) return 'Built'
+    if (item === 'trebuchet') {
+      // An engine is attached to a *particular* body of troops, so the troops
+      // have to be standing here to receive it.
+      if (!site.siegeWorks) return 'Needs a Siege Works'
+      if (!site.army || site.army.order !== 'idle') return 'Army must be home'
+      if (Sim.hasSiege(site.army)) return 'Already escorting one'
+    }
+    if (item === 'army' && site.army && 1 - Sim.armyStrength(site.army) < 0.02) {
+      return 'Army ready'
+    }
+    if (this.wizards[site.owner].gold < this.buildSpec(site, item).gold) return 'Too costly'
+    return null
+  }
+
+  /**
+   * Put something in a city's queue.
+   *
+   * Gold is taken at commission rather than on completion, so a queued item can
+   * never fail at the last second because the wizard spent the money elsewhere —
+   * and so the cost is visible at the moment the choice is made.
+   *
+   * A queue already running is refused, with one exception: a repair yields.
+   * That is the whole of the "repair occupies the queue" rule — a city with
+   * broken walls and nothing better to do fixes them, and a city with something
+   * better to do builds that instead.
+   */
+  queueBuild(site: SiteState, item: BuildItem, targetId = -1): boolean {
+    if (site.queue && site.queue.item !== 'repair') return false
+    if (this.buildBlocked(site, item)) return false
+    // A caravan is the one order that names a place, so it is the one order
+    // that can be refused for where it is going rather than for what it costs.
+    if (item === 'caravan' && !this.canLinkTo(targetId)) return false
+
+    const { gold, time } = this.buildSpec(site, item)
+    this.wizards[site.owner].gold -= gold
+    site.queue = { item, remaining: time, total: time, targetId, travelling: false }
     return true
+  }
+
+  /** A node that is standing empty and unspoken for. */
+  canLinkTo(nodeId: number): boolean {
+    const node = this.siteById(nodeId)
+    if (!node || node.kind !== 'node' || node.owner >= 0) return false
+    if (!this.isCleared(node)) return false
+    // One city per resource, which here just means one caravan per node.
+    return !this.caravans.some((c) => c.nodeSiteId === nodeId)
+  }
+
+  /** Is this city drawing on a live node of this kind? */
+  linkedTo(siteId: number, resource: ResourceKind): boolean {
+    return this.caravans.some(
+      (c) =>
+        c.live && c.homeSiteId === siteId && this.siteById(c.nodeSiteId)?.resource === resource,
+    )
+  }
+
+  /** The live links a city holds, for the panel to list. */
+  linksOf(siteId: number): Caravan[] {
+    return this.caravans.filter((c) => c.homeSiteId === siteId)
   }
 
   // --- the tick --------------------------------------------------------------
@@ -601,6 +737,7 @@ export class Sim {
     this.updateEconomy(dt)
     this.updateProjectiles(dt, frame)
     this.updateArmies(dt)
+    this.updateCaravans(dt)
     this.updateUnits(dt, slow)
     this.updateSites(dt)
     this.updateVictory(dt)
@@ -633,6 +770,14 @@ export class Sim {
           if (a.owner === site.owner) continue
           if (Sim.alive(a).length === 0) continue
           if (Math.hypot(a.ax - site.x, a.az - site.z) < NEAR) hot = true
+        }
+      }
+      // Wagons too, or a caravan strolls past a sleeping garrison untouched and
+      // every route on the map is safe by accident.
+      if (!hot) {
+        for (const c of this.caravans) {
+          if (c.owner === site.owner || c.unit.dead) continue
+          if (Math.hypot(c.unit.x - site.x, c.unit.z - site.z) < NEAR) hot = true
         }
       }
       if (hot) this.hot.add(site.id)
@@ -694,7 +839,7 @@ export class Sim {
         if (w.isPlayer) this.opts.onMessage(`Recovered ${g.gold} gold.`)
       }
 
-      if (!w.isPlayer) this.flyAi(w, dt, frame)
+      if (!w.isPlayer) flyAi(this, w, dt, frame)
     }
   }
 
@@ -760,22 +905,51 @@ export class Sim {
     for (const s of this.sites) {
       if (s.owner < 0) continue
       const w = this.wizards[s.owner]
-      if (s.kind === 'city') w.gold += RULES.city.income * dt
-      else if (s.kind === 'mine') w.gold += RULES.mine.income * dt
+      if (s.kind === 'city') {
+        w.gold += RULES.city.income[s.tier - 1] * dt
+        if (s.market) w.gold += RULES.city.marketIncome * dt
+      } else if (s.kind === 'mine') w.gold += RULES.mine.income * dt
 
       if (s.kind !== 'city' || !s.queue) continue
       s.queue.remaining -= dt
       if (s.queue.remaining > 0) continue
 
       const item = s.queue.item
+      const targetId = s.queue.targetId
       s.queue = null
-      if (item === 'shrine') s.shrine = true
-      else if (item === 'fort') {
-        s.fort = true
-        this.spawnTowers(s)
-      } else this.trainArmy(s)
+      switch (item) {
+        case 'shrine':
+          s.shrine = true
+          break
+        case 'market':
+          s.market = true
+          break
+        case 'siegeWorks':
+          s.siegeWorks = true
+          break
+        case 'trebuchet':
+          this.attachTrebuchet(s)
+          break
+        case 'fort':
+          s.fort = true
+          this.repairTowers(s)
+          break
+        case 'tier':
+          s.tier = Math.min(MAX_TIER, s.tier + 1)
+          break
+        case 'repair':
+          this.repairTowers(s)
+          break
+        case 'caravan':
+          this.launchCaravan(s, targetId)
+          continue
+        default:
+          this.trainArmy(s)
+          break
+      }
       if (s.owner === 0) {
-        this.opts.onMessage(`${s.name}: ${RULES.city.build[item].label} complete.`)
+        const done = item === 'tier' ? `is now a ${TIER_NAMES[s.tier]}` : `${RULES.city.build[item].label} complete`
+        this.opts.onMessage(`${s.name}: ${done}.`)
       }
     }
   }
@@ -802,6 +976,8 @@ export class Sim {
         ax: site.x,
         az: site.z,
         fighting: false,
+        damageMul: 1,
+        marchMul: 1,
       }
       this.armies.push(army)
       site.army = army
@@ -812,7 +988,12 @@ export class Sim {
     // Reconstitute: heal what survived, replace what did not. Same call whether
     // this is a new army or a rebuilt one, so there is only one place that knows
     // what an army is made of.
-    const survivors = Sim.alive(army)
+    const all = Sim.alive(army)
+    // The engine is set aside and put straight back. It is never rebuilt by a
+    // reconstitution and — the part that bites — never caught by the retire
+    // loop below, which kills anything the new roster did not ask for.
+    const siege = all.filter((u) => u.def.role === 'siege')
+    const survivors = all.filter((u) => u.def.role !== 'siege')
     army.units = []
     for (let i = 0; i < wanted.length; i++) {
       const existing = survivors[i]
@@ -830,6 +1011,7 @@ export class Sim {
     for (const s of survivors) {
       if (!army.units.includes(s)) s.dead = true
     }
+    army.units.push(...siege)
   }
 
   private updateProjectiles(dt: number, frame: TerrainFrame): void {
@@ -904,11 +1086,20 @@ export class Sim {
       // The bearer alone means the fighting strength is gone. Marching a lone
       // standard-bearer into a garrison is not a decision anyone would make on
       // purpose, so the army makes it for them and goes home.
-      if (alive.length === 1 && alive[0].def.role === 'bearer' && army.order !== 'return') {
+      // Routing is about having nobody left who can fight *units*. A trebuchet
+      // cannot, so a bearer and an engine alone must go home rather than the
+      // engine marching on by itself.
+      const fighters = alive.filter((u) => u.def.role !== 'bearer' && u.def.role !== 'siege')
+      if (fighters.length === 0 && alive.length > 0 && army.order !== 'return') {
         army.order = 'return'
         army.targetSiteId = -1
         if (army.owner === 0) this.opts.onMessage('An army has routed and is marching home.')
       }
+
+      // What the home city's links are worth, read fresh every tick so that
+      // cutting a caravan is felt on the next swing rather than the next battle.
+      army.damageMul = this.linkedTo(army.homeSiteId, 'mithril') ? RULES.node.mithrilDamage : 1
+      army.marchMul = this.linkedTo(army.homeSiteId, 'horse') ? RULES.node.horseMarch : 1
 
       // In contact, not merely aware.
       //
@@ -983,7 +1174,10 @@ export class Sim {
         const dz = gz - army.az
         const d = Math.hypot(dx, dz)
         if (d > 1) {
-          const step = Math.min(d, RULES.army.march * dt)
+          // A siege train is a visible, slow, interceptable commitment — that
+          // is the cost of the only thing that cracks a fort.
+          const siegeMul = Sim.hasSiege(army) ? RULES.siege.march : 1
+          const step = Math.min(d, RULES.army.march * army.marchMul * siegeMul * dt)
           army.ax += (dx / d) * step
           army.az += (dz / d) * step
         }
@@ -1015,6 +1209,15 @@ export class Sim {
 
       if (u.hurtT > 0) u.hurtT -= dt
 
+      // A wagon is walked by its caravan, not by the combat loop. It never
+      // acquires, never chases, and never stops for a fight it cannot join.
+      if (u.wagon) {
+        u.target = null
+        u.targetWizard = null
+        u.animT += dt
+        continue
+      }
+
       const anchor = this.anchorFor(u)
       // A garrison with nothing near it does not think. See `markHotSites`.
       const asleep = u.armyId < 0 && u.siteId >= 0 && !this.hot.has(u.siteId)
@@ -1040,7 +1243,7 @@ export class Sim {
         } else {
           u.anim = u.hurtT > 0 ? 'hurt' : 'attack'
           u.flip = tx < u.x
-          const dmg = u.def.dps * dt
+          const dmg = u.def.dps * this.damageMul(u) * dt
           if (u.target) this.damageUnit(u.target, dmg)
           else if (u.targetWizard) this.damageWizard(u.targetWizard, dmg)
         }
@@ -1066,7 +1269,24 @@ export class Sim {
       if (army) {
         const i = army.units.indexOf(u)
         const [ox, oz] = FORMATION[(i < 0 ? 0 : i) % FORMATION.length]
-        return { x: army.ax + ox, z: army.az + oz, leash: RULES.army.leash }
+        // An army standing on its objective may fight anywhere on that pad.
+        //
+        // Without this, a fort beat any number of armies. A city's towers stand
+        // at 0.55 of a 48-unit pad — 26 out — so a swordsman needed to reach 24
+        // from the army's anchor and the 22-unit chase leash stopped it two
+        // units short, every time. Only the archer could answer, one bow
+        // against two towers, and six soldiers stood in range being shot while
+        // physically unable to close. The leash is there to stop an army
+        // dissolving into a skirmish line across the countryside, which is a
+        // rule about *travelling*, not about the fight it came to have.
+        // Widened, like the build costs: `RULES` is `as const`, so every number
+        // in it is a literal type until something says otherwise.
+        let leash: number = RULES.army.leash
+        const target = this.siteById(army.targetSiteId)
+        if (target && Math.hypot(target.x - army.ax, target.z - army.az) < target.radius * 1.2) {
+          leash = Math.max(leash, target.radius * 0.9)
+        }
+        return { x: army.ax + ox, z: army.az + oz, leash }
       }
     }
     const site = this.siteById(u.siteId)
@@ -1098,6 +1318,24 @@ export class Sim {
    * quick foot soldier and the ranged line never comes under pressure.
    */
   private acquire(u: SimUnit, anchor: { x: number; z: number; leash: number }): void {
+    // A trebuchet throws at walls and at nothing else. It cannot hit a soldier,
+    // which is why an army needs its escort as much as the escort needs it.
+    if (u.def.role === 'siege') {
+      let best: SimUnit | null = null
+      let bestD = u.def.range
+      for (const t of this.units) {
+        if (t.dead || !t.tower || t.owner === u.owner) continue
+        const d = Math.hypot(t.x - u.x, t.z - u.z)
+        if (d < bestD) {
+          bestD = d
+          best = t
+        }
+      }
+      u.targetWizard = null
+      u.target = best
+      return
+    }
+
     u.target = null
     u.targetWizard = null
     if (u.def.dps <= 0) return
@@ -1105,12 +1343,20 @@ export class Sim {
     let best: SimUnit | null = null
     let bestScore = Infinity
     const reach = anchor.leash + u.def.range
+    // How far this unit will *look*, which must never be shorter than how far
+    // it may *go*. The two were independent — 32 to notice, but a leash widened
+    // to the pad once the army arrived — and a fort sits right on the seam: its
+    // towers stand 31 units out from the middle of a city, so whether a soldier
+    // engaged the second tower came down to which formation slot it happened to
+    // be standing in. Two armies took one tower, then stalled beside the other
+    // for four minutes without ever seeing it.
+    const aggro = Math.max(RULES.army.aggro, anchor.leash)
 
     for (const o of this.units) {
       if (o.dead || o.owner === u.owner) continue
       if (o.owner < 0 && u.owner < 0) continue
       const d = Math.hypot(o.x - u.x, o.z - u.z)
-      if (d > RULES.army.aggro) continue
+      if (d > aggro) continue
       if (Math.hypot(o.x - anchor.x, o.z - anchor.z) > reach) continue
       // Halving the effective distance is a preference, not a compulsion: a
       // cavalier will still take the swordsman in front of it over an archer
@@ -1126,7 +1372,7 @@ export class Sim {
     for (const w of this.wizards) {
       if (w.dead || w.faction === u.owner) continue
       const d = Math.hypot(w.x - u.x, w.z - u.z)
-      if (d > RULES.army.aggro) continue
+      if (d > aggro) continue
       if (Math.hypot(w.x - anchor.x, w.z - anchor.z) > reach) continue
       if (d < bestScore) {
         bestScore = d
@@ -1151,7 +1397,9 @@ export class Sim {
     const dz = tz - u.z
     const d = Math.hypot(dx, dz)
     if (d < 1e-3) return
-    const move = Math.min(d, u.def.speed * dt)
+    // Scaled by the same march buff the anchor uses. Buffing one and not the
+    // other would leave every unit permanently trailing its own formation.
+    const move = Math.min(d, u.def.speed * this.marchMul(u) * dt)
     const nx = u.x + (dx / d) * move
     const nz = u.z + (dz / d) * move
     // Never step outside the leash while chasing. Walking home is exempt, or a
@@ -1162,6 +1410,129 @@ export class Sim {
     u.flip = dx < 0
   }
 
+  /** Damage and march multipliers for a unit, via the army it belongs to. */
+  private damageMul(u: SimUnit): number {
+    return u.armyId < 0 ? 1 : (this.armyById(u.armyId)?.damageMul ?? 1)
+  }
+
+  private marchMul(u: SimUnit): number {
+    return u.armyId < 0 ? 1 : (this.armyById(u.armyId)?.marchMul ?? 1)
+  }
+
+  /**
+   * Send the wagon, and keep holding the queue until it gets there.
+   *
+   * The build finishing is not the item finishing: §3.4 of the full doc prices
+   * a connection in *travel*, and this is where that happens. The city's queue
+   * stays occupied for the whole journey, so a node on the far side of the
+   * island costs several armies' worth of production and a node next door costs
+   * almost nothing — a distance rule with no distance formula in it.
+   */
+  private launchCaravan(site: SiteState, nodeId: number): void {
+    const node = this.siteById(nodeId)
+    if (!node) return
+
+    const u = this.spawnUnit(WAGON_DEF, site.owner, site.x, site.z)
+    u.wagon = true
+    this.caravans.push({
+      id: this.nextCaravanId++,
+      owner: site.owner,
+      homeSiteId: site.id,
+      nodeSiteId: nodeId,
+      unit: u,
+      live: false,
+      toNode: true,
+    })
+
+    const travel = Math.hypot(node.x - site.x, node.z - site.z) / RULES.caravan.speed
+    site.queue = {
+      item: 'caravan',
+      remaining: travel,
+      total: travel,
+      targetId: nodeId,
+      travelling: true,
+    }
+    if (site.owner === 0) this.opts.onMessage(`${site.name}: a caravan sets out for ${node.name}.`)
+  }
+
+  private updateCaravans(dt: number): void {
+    for (const c of [...this.caravans]) {
+      const node = this.siteById(c.nodeSiteId)
+      const home = this.siteById(c.homeSiteId)
+
+      // Severed: the wagon is dead, or the city that sent it changed hands.
+      if (c.unit.dead || !node || !home || home.owner !== c.owner) {
+        this.severCaravan(c)
+        continue
+      }
+
+      const dest = c.toNode ? node : home
+      const dx = dest.x - c.unit.x
+      const dz = dest.z - c.unit.z
+      const d = Math.hypot(dx, dz)
+
+      if (d > 4) {
+        const move = Math.min(d, RULES.caravan.speed * dt)
+        c.unit.x += (dx / d) * move
+        c.unit.z += (dz / d) * move
+        c.unit.flip = dx < 0
+        c.unit.anim = 'walk'
+        // The held queue's bar tracks the wagon itself rather than a countdown,
+        // so what the player watches is the thing that is actually happening.
+        if (!c.live && home.queue?.travelling) {
+          home.queue.remaining = d / RULES.caravan.speed
+        }
+        continue
+      }
+
+      if (!c.live) {
+        // Arrival, and this is what claims the node — no wizard involved. The
+        // army camped here sees the site turn its own colour and marches home
+        // on the rule it already had.
+        c.live = true
+        node.owner = c.owner
+        node.regenT = 0
+        for (const u of node.defenders) u.dead = true
+        node.defenders = []
+        if (home.queue?.travelling) home.queue = null
+        if (c.owner === 0) this.opts.onMessage(`${node.name} now supplies ${home.name}.`)
+      }
+      c.toNode = !c.toNode
+    }
+  }
+
+  /** Cut a link. The buff is computed from live caravans, so this is the whole of it. */
+  private severCaravan(c: Caravan): void {
+    this.caravans = this.caravans.filter((x) => x !== c)
+    c.unit.dead = true
+
+    const node = this.siteById(c.nodeSiteId)
+    if (node && node.owner === c.owner) {
+      node.owner = NOBODY
+      node.regenT = 0
+    }
+    const home = this.siteById(c.homeSiteId)
+    if (home?.queue?.travelling && home.queue.targetId === c.nodeSiteId) home.queue = null
+    if (c.owner === 0 && node) this.opts.onMessage(`The caravan to ${node.name} is lost.`)
+  }
+
+  /**
+   * Is somebody hostile standing in this site's clearing?
+   *
+   * Nobody rebuilds a wall with the enemy in the courtyard. Without this, a
+   * besieged city re-raises its towers every forty-five seconds for as long as
+   * it is being held, so an army that had already won had to keep winning —
+   * and an assault whose wizard was dead or elsewhere could never resolve.
+   */
+  private contested(site: SiteState): boolean {
+    for (const u of this.units) {
+      if (u.dead || u.owner === site.owner || u.owner < 0) continue
+      if (u.siteId === site.id) continue
+      if (Math.hypot(u.x - site.x, u.z - site.z) < site.radius) return true
+    }
+    return false
+  }
+
   private updateSites(dt: number): void {
     for (const site of this.sites) {
       site.defenders = site.defenders.filter((u) => !u.dead || u.deadT < 2.5)
@@ -1170,17 +1541,18 @@ export class Sim {
       // A cleared lair leaves its hoard on the ground for whoever flies over it.
       if (site.kind === 'lair' && site.cache && living.length === 0) this.dropCache(site)
 
-      // A fort rebuilds its towers for whoever holds the city.
-      if (site.fort && site.owner >= 0) {
-        const towers = living.filter((u) => u.tower).length
-        if (towers < TOWER_OFFSETS.length) {
-          site.towerT += dt
-          if (site.towerT >= 60) {
-            site.towerT = 0
-            site.defenders = site.defenders.filter((u) => !u.tower)
-            this.spawnTowers(site)
-          }
-        } else site.towerT = 0
+      // A damaged fort repairs itself — but only through the queue, so a city
+      // patching its walls is a city building nothing else. That is what makes
+      // an attack too weak to win still worth launching.
+      //
+      // Auto-queued rather than offered, because no owner would ever choose not
+      // to repair; the choice is the other direction, and `queueBuild` gives it
+      // to them by letting any real order push a repair aside.
+      if (site.fort && site.owner >= 0 && !site.queue && !this.contested(site)) {
+        const towers = living.filter((u) => u.tower)
+        const hurt =
+          towers.length < TOWER_OFFSETS.length || towers.some((u) => u.hp < u.def.hp - 0.5)
+        if (hurt) this.queueBuild(site, 'repair')
       }
 
       if (site.owner === NOBODY && site.garrison) {
@@ -1264,178 +1636,6 @@ export class Sim {
     }
   }
 
-  // --- the AI ----------------------------------------------------------------
-
-  /**
-   * An AI wizard's whole brain.
-   *
-   * Deliberately a script, not a planner. It plays by exactly the player's
-   * rules — same two spells, same costs, same queue, no vision cheats and no
-   * economy bonus — and the bar it has to clear is "applies credible pressure",
-   * not "plays well". Anything cleverer would be tuning a system nobody has
-   * played against yet.
-   */
-  private flyAi(w: Wizard, dt: number, frame: TerrainFrame): void {
-    // A consecration is a stance: grounded, silent, and it takes ten seconds.
-    // Thinking mid-channel would only ever break it — a fireball cancels the
-    // channel by rule, and re-deciding where to fly is meaningless while the
-    // wizard cannot move.
-    if (w.channelSiteId >= 0) return
-
-    w.thinkT -= dt
-    if (w.thinkT <= 0) {
-      w.thinkT = 1.5
-      this.thinkAi(w)
-    }
-
-    // Fireball whatever is closest, if anything is in reach. The AI aims at a
-    // body rather than at the ground, which is the same shot the player takes.
-    if (w.cooldown <= 0 && w.mana > RULES.fireball.mana * 2) {
-      let best: { x: number; z: number } | null = null
-      // The AI plays by the player's range, not by its own. Reading the rule
-      // rather than repeating the number is what keeps that true when it moves.
-      let bestD: number = RULES.castRange
-      for (const u of this.units) {
-        if (u.dead || u.owner === w.faction) continue
-        const d = Math.hypot(u.x - w.x, u.z - w.z)
-        if (d < bestD) {
-          bestD = d
-          best = u
-        }
-      }
-      if (best) {
-        this.castFireball(w, best.x, best.z, terrainHeightAt(frame, best.x, best.z) + 1)
-      }
-    }
-
-    // Flying. Nothing subtle: straight at the goal, at the same speed the player
-    // gets, and it stops to consecrate when it arrives.
-    if (w.channelSiteId >= 0) return
-    const dx = w.goalX - w.x
-    const dz = w.goalZ - w.z
-    const d = Math.hypot(dx, dz)
-    if (d > 4) {
-      const speed = 17
-      const step = Math.min(d, speed * dt)
-      w.x += (dx / d) * step
-      w.z += (dz / d) * step
-    }
-    w.y = terrainHeightAt(frame, w.x, w.z) + 8
-  }
-
-  private thinkAi(w: Wizard): void {
-    // 1. Keep the queue busy. Army first — an AI with no army does nothing at
-    //    all — then the economy, then rebuild.
-    for (const site of this.sitesOf(w.faction)) {
-      if (site.kind !== 'city' || site.queue) continue
-      if (!site.army) this.queueBuild(site, 'army')
-      else if (!site.shrine) this.queueBuild(site, 'shrine')
-      else if (!site.fort) this.queueBuild(site, 'fort')
-      else this.queueBuild(site, 'army')
-    }
-
-    // 2. Somebody is close to winning: everything goes at their points.
-    const leader = this.wizards.find((o) => o.faction !== w.faction && o.charge >= 60)
-    const owned = this.sitesOf(w.faction).length
-
-    for (const army of this.armiesOf(w.faction)) {
-      if (Sim.alive(army).length < 4) continue
-      if (army.order === 'march' || army.order === 'camp') continue
-
-      let target: SiteState | null = null
-      if (leader) {
-        target = this.nearestSite(army.ax, army.az, (s) => s.kind === 'point' && s.owner === leader.faction)
-      }
-      if (!target) {
-        // Mines and towns early, points once there is an economy behind them.
-        target = this.nearestSite(army.ax, army.az, (s) => {
-          if (s.owner === w.faction) return false
-          if (s.kind === 'point') return owned >= 3
-          if (s.kind === 'lair') return false
-          return true
-        })
-      }
-      if (target) this.orderArmy(army, target.id)
-    }
-
-    // 3. The wizard: run home when hurt, otherwise go claim whatever its armies
-    //    have already cleared, otherwise follow the fighting.
-    if (w.hp < 30) {
-      const home = this.nearestSite(w.x, w.z, (s) => s.owner === w.faction && s.kind === 'city')
-      if (home) {
-        w.goalX = home.x
-        w.goalZ = home.z
-        return
-      }
-    }
-
-    // What my own armies have already taken, first.
-    //
-    // Nearest-cleared-site alone is not good enough and was actively broken:
-    // both AI wizards picked the same distant town, hovered over it trading
-    // fireballs, and left their armies camped on mines that nobody ever claimed.
-    // Eight minutes in, neither had captured anything. An army that clears a
-    // site and is never followed up is the entire economy standing still, so the
-    // site one of my own armies is sitting on outranks anything else on the map.
-    const camps = this.armiesOf(w.faction)
-      .filter((a) => a.order === 'camp')
-      .map((a) => this.siteById(a.targetSiteId))
-      .filter((s): s is SiteState => !!s && s.owner !== w.faction && this.isCleared(s))
-
-    let claimable: SiteState | null = null
-    let bestD = Infinity
-    for (const s of camps) {
-      const d = Math.hypot(s.x - w.x, s.z - w.z)
-      if (d < bestD) {
-        bestD = d
-        claimable = s
-      }
-    }
-
-    // Failing that, anything cleared and close by — a lair the player emptied,
-    // a town whose garrison never came back. Bounded, so this stays opportunism
-    // rather than a cross-map errand.
-    if (!claimable) {
-      const near = this.nearestSite(
-        w.x,
-        w.z,
-        (s) => s.owner !== w.faction && s.kind !== 'lair' && this.isCleared(s),
-      )
-      if (near && Math.hypot(near.x - w.x, near.z - w.z) < 420) claimable = near
-    }
-
-    if (claimable) {
-      w.goalX = claimable.x
-      w.goalZ = claimable.z
-      if (this.inCastRange(w, claimable.x, claimable.z)) this.beginConvert(w, claimable)
-      return
-    }
-
-    const army = this.armiesOf(w.faction).find((a) => a.order === 'march' || a.order === 'camp')
-    if (army) {
-      w.goalX = army.ax
-      w.goalZ = army.az
-    }
-  }
-
-  private nearestSite(
-    x: number,
-    z: number,
-    pass: (s: SiteState) => boolean,
-  ): SiteState | null {
-    let best: SiteState | null = null
-    let bestD = Infinity
-    for (const s of this.sites) {
-      if (!pass(s)) continue
-      const d = Math.hypot(s.x - x, s.z - z)
-      if (d < bestD) {
-        bestD = d
-        best = s
-      }
-    }
-    return best
-  }
-
   // --- drawing ---------------------------------------------------------------
 
   /**
@@ -1451,12 +1651,14 @@ export class Sim {
     unitLayer: BoardLayer<UnitKey>,
     boardLayer: BoardLayer<SpriteKey>,
     banners: Banners,
+    siege: SiegeEngines,
     frame: TerrainFrame,
     dimAt: (x: number, z: number) => number,
   ): void {
     unitLayer.begin(frame)
     boardLayer.begin(frame)
     banners.begin(frame)
+    siege.begin(frame)
 
     for (const site of this.sites) {
       const dim = dimAt(site.x, site.z)
@@ -1519,14 +1721,19 @@ export class Sim {
     for (const u of this.units) {
       const dim = dimAt(u.x, u.z)
       if (dim <= 0.02) continue
-      if (u.tower) {
+      if (u.def.role === 'siege') {
+        siege.push(u.x, u.z, 11, u.owner >= 0 ? FACTIONS[u.owner].tint : NEUTRAL_TINT, dim, u.flip)
+        continue
+      }
+      if (u.tower || u.wagon) {
         boardLayer.push({
-          sprite: 'mod.tower' as SpriteKey,
+          sprite: (u.wagon ? 'pickup.wagon' : 'mod.tower') as SpriteKey,
           x: u.x,
           z: u.z,
           dim,
           tint: u.owner >= 0 ? FACTIONS[u.owner].tint : NEUTRAL_TINT,
-          scale: 0.8,
+          scale: u.wagon ? 0.7 : 0.8,
+          discRadius: u.wagon ? 2 : undefined,
         })
         continue
       }
@@ -1570,5 +1777,6 @@ export class Sim {
     unitLayer.end()
     boardLayer.end()
     banners.end()
+    siege.end()
   }
 }

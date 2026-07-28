@@ -1,0 +1,158 @@
+/**
+ * Every number the match is played on, in one table.
+ *
+ * This is `docs/first-playable.md` §10 plus `docs/second-playable.md` §11. Kept
+ * together deliberately: these are tuning values chosen to be *consistent*
+ * rather than correct, and they are meaningless individually — fireball damage
+ * only means something against the unit HP it is aimed at, and mana regen only
+ * means something against the fireball cost. Tuning is editing this file, not
+ * hunting through the systems that read it.
+ *
+ * It lives apart from `sim.ts` for the same reason: the numbers are the part a
+ * designer edits, and they should not require scrolling past sixteen hundred
+ * lines of simulation to find.
+ */
+export const RULES = {
+  wizard: {
+    hp: 100,
+    /** HP per second, inside friendly territory only. */
+    regen: 3,
+    respawn: 15,
+    mana: 100,
+    manaRegen: 2,
+    /** Extra mana regen per shrine held, and per Point of Power held. */
+    manaPerShrine: 1,
+    manaPerPoint: 3,
+    sprint: 1.5,
+    sprintDrain: 4,
+  },
+  fireball: {
+    mana: 15,
+    cooldown: 1.5,
+    damage: 30,
+    radius: 6,
+    speed: 25,
+  },
+  /**
+   * How far the wizard can reach with anything, in world units.
+   *
+   * One number for the whole spellbook rather than one per spell: the wizard's
+   * reach is a property of the wizard, and two spells with two different ranges
+   * would need two different indicators drawn around them.
+   *
+   * About twice the height the carpet rides at, which is what makes it legible
+   * on screen — the wizard's own hover is the only length the player has an
+   * intuition for. Written as a distance rather than derived from `hover`,
+   * deliberately: tuning the ride height is a look change, and it must not
+   * silently retune what the wizard can hit.
+   */
+  castRange: 15,
+  convert: {
+    /** Seconds of channel. The wizard is grounded and any hit interrupts. */
+    time: 10,
+  },
+  army: {
+    /** March speed. The wizard's 17 m/s is a little over four times this. */
+    march: 4,
+    /**
+     * How far from its anchor a unit will chase before breaking off.
+     *
+     * Small, so an army stays a body rather than dissolving into a skirmish
+     * line spread over a hundred units. It is the reason a fight is one thing
+     * you can look at instead of six duels in different postcodes.
+     */
+    leash: 22,
+    /**
+     * How far a unit looks for something to fight.
+     *
+     * The single most important number for how combat *reads*. At 90 an army
+     * and a garrison locked on to each other from two town-widths apart — well
+     * outside the frame at the follow camera — so battles began and often ended
+     * without ever being on screen. At 32 the two sides have to be close enough
+     * that the player watching their wizard can see both.
+     *
+     * Comfortably above the 16-unit ranged reach, so archers still open fire as
+     * they close rather than walking into contact first.
+     */
+    aggro: 32,
+  },
+  city: {
+    /**
+     * Gold per second, by tier. A Village pays 10 a minute, a City 20.
+     *
+     * Tiering up never pays for itself on income alone inside a match — the
+     * ~18 minutes it takes to earn back 200 gold is most of the game. You tier
+     * up for what it unlocks; the income is a consolation prize, and it is
+     * meant to read that way.
+     */
+    income: [10 / 60, 15 / 60, 20 / 60],
+    /** Extra gold per second once a Market stands. */
+    marketIncome: 10 / 60,
+    /** Cost, seconds, of each queue item. */
+    build: {
+      army: { gold: 100, time: 60, label: 'Train Army', tier: 1 },
+      shrine: { gold: 100, time: 60, label: 'Shrine', tier: 1 },
+      tier: { gold: 0, time: 0, label: 'Tier Up', tier: 1 },
+      fort: { gold: 150, time: 90, label: 'Fort', tier: 2 },
+      market: { gold: 150, time: 75, label: 'Market', tier: 2 },
+      caravan: { gold: 50, time: 30, label: 'Caravan', tier: 2 },
+      siegeWorks: { gold: 250, time: 90, label: 'Siege Works', tier: 3 },
+      trebuchet: { gold: 200, time: 90, label: 'Trebuchet', tier: 3 },
+      /**
+       * Free, auto-queued, and the only item that yields to anything else.
+       *
+       * A city with broken walls and an idle queue fixes them; a city with
+       * something better to do builds that instead. That one rule is what makes
+       * an attack too weak to win still worth launching — it is the full doc's
+       * §4.5 economic suppression, and it costs one flag on one queue item.
+       */
+      repair: { gold: 0, time: 45, label: 'Repair', tier: 1 },
+    },
+    /** Cost and time to reach the next tier, indexed by the tier being left. */
+    tierUp: [
+      { gold: 200, time: 90 },
+      { gold: 400, time: 120 },
+    ],
+  },
+  mine: { income: 15 / 60 },
+  /**
+   * The connection resources, and what a live link does to its city.
+   *
+   * Binary: on while the caravan runs, off the instant it dies. Three buffs
+   * that answer three different questions — hit harder, arrive sooner, come
+   * back cheaper — which is what makes "which node do I want" a real question
+   * rather than a shopping list.
+   */
+  node: {
+    /** Damage multiplier for units from a Mithril-linked city. */
+    mithrilDamage: 1.3,
+    /** March multiplier for armies from a Horse-Plains-linked city. */
+    horseMarch: 1.3,
+    /** Reconstitution cost and time multiplier at a Granary-linked city. */
+    granaryRecon: 0.6,
+  },
+  caravan: {
+    /** Wagon health. Unarmed: anything hostile kills it in seconds. */
+    hp: 60,
+    /** Wagon speed, slower than a marching army. */
+    speed: 3,
+  },
+  siege: {
+    /** The escorting army's march multiplier while a trebuchet lives. */
+    march: 0.6,
+  },
+  startingGold: 150,
+  /** Seconds for a cleared neutral garrison to come back. */
+  garrisonRegen: 300,
+  /** Seconds for a held Point of Power to regrow its guard for its owner. */
+  pointRegen: 180,
+  /** Charge percent per second, per held point: 1% per 12 s. */
+  chargePerPoint: 1 / 12,
+} as const
+
+export type BuildItem = keyof typeof RULES.city.build
+
+/** Village, Town, City — the tier a site is at, indexed from 1. */
+export const TIER_NAMES = ['', 'Village', 'Town', 'City'] as const
+
+export const MAX_TIER = 3

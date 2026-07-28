@@ -34,7 +34,7 @@ export type AnimName = keyof typeof UNIT_ANIM
 export const ANIM_FPS = 6
 
 /** What a unit is for. Drives targeting preference and nothing else. */
-export type Role = 'foot' | 'ranged' | 'fast' | 'bearer' | 'tower'
+export type Role = 'foot' | 'ranged' | 'fast' | 'bearer' | 'tower' | 'siege'
 
 export interface UnitStats {
   role: Role
@@ -73,7 +73,36 @@ export const ARCHETYPE: Record<Role, UnitStats> = {
   // bearer is the last one alive", and a bearer that could win a fight on its
   // own would make that unreachable.
   bearer: { role: 'bearer', hp: 40, dps: 0, range: 0, speed: 4, scale: 0.9 },
-  tower: { role: 'tower', hp: 200, dps: 10, range: 26, speed: 0, scale: 1 },
+  /**
+   * A fort tower, and the number the whole siege system hangs off.
+   *
+   * Two of these measure 600 x 24 = 14,400 by `groupPower` below — about 1.6
+   * armies. That is deliberate and it is the keystone of `second-playable.md`:
+   * one ordinary army must *fail* against a forted city, or siege is a solution
+   * with no problem. At the old 200/10 a fort came to 8,000, slightly weaker
+   * than the single army sent to take it, and nobody would ever have built a
+   * trebuchet.
+   *
+   * The 30-unit reach is what a trebuchet's 55 has to beat.
+   */
+  tower: { role: 'tower', hp: 300, dps: 12, range: 30, speed: 0, scale: 1 },
+  /**
+   * The trebuchet. Three numbers, each doing one job.
+   *
+   * 40 damage against a 300-hit-point tower is 7.5 seconds a tower, against a
+   * fort that repairs itself whole in 45 — siege out-damages repair about six to
+   * one, which is what makes it the *only* way one city cracks another.
+   *
+   * 55 reach beats the tower's 30, so the engine works from outside the fort's
+   * answer and the defender has to come out. That is the full doc's "compels the
+   * opponent to respond with an army", arrived at from geometry rather than
+   * asserted.
+   *
+   * And 80 health means the sortie that reaches it wins: one fast unit kills it
+   * in ten seconds. Strong, slow and fragile at once is the only version of
+   * siege that starts a fight instead of ending one.
+   */
+  siege: { role: 'siege', hp: 80, dps: 40, range: 55, speed: 4, scale: 1.2 },
 }
 
 export interface UnitDef extends UnitStats {
@@ -185,9 +214,15 @@ export const NEUTRAL_TINT = 0x9aa4ae
  * The bearer contributes health and no damage, so it correctly counts for
  * nothing here — an army is five fighting units and a flag.
  *
- * A standard army measures about 5700. The garrison tables below are written as
- * multiples of that, which is the only way these numbers mean anything: a lair
- * is not "325 hit points", it is "one and a quarter armies".
+ * A standard six-unit army measures **8,840** — 260 health by 34 damage, the
+ * bearer correctly counting for nothing. The garrison tables below are written
+ * as multiples of that, which is the only way these numbers mean anything: a
+ * lair is not "325 hit points", it is "four fifths of an army".
+ *
+ * That figure was wrong in `docs/first-playable.md` (it says 5,700) and the
+ * multiples quoted in the tables below were scaled to it. The garrisons play
+ * well and none of them changed; the labels did. `docs/second-playable.md` §1
+ * carries the corrected table.
  */
 export function groupPower(units: readonly UnitDef[]): number {
   let hp = 0
@@ -202,11 +237,11 @@ export function groupPower(units: readonly UnitDef[]): number {
 
 export const GARRISONS: Record<string, UnitDef[]> = {
   /**
-   * A neutral town. ~0.55 armies: one healthy army takes it and walks away with
+   * A neutral town. ~0.35 armies: one healthy army takes it and walks away with
    * casualties, which is what "the primary expansion mechanism" has to mean.
    *
    * This was four defenders including a second archer, and measured out at 0.9
-   * armies — a near-run thing that cost five of six units every time. Expansion
+   * armies against the old 5,700 yardstick — a near-run thing that cost five of six units every time. Expansion
    * that has to be paid for with a whole army does not happen twice, and the
    * whole opening of the match is built on it happening repeatedly.
    */
@@ -215,12 +250,25 @@ export const GARRISONS: Record<string, UnitDef[]> = {
     unit('unit.greatElf.hunter', 'Hunter', 'ranged'),
     unit('unit.greatElf.deer', 'Stag', 'fast'),
   ],
-  /** A gold vein, ~0.23 armies. Soloable by a careful wizard, trivial to an army. */
+  /** A gold vein, ~0.15 armies. Soloable by a careful wizard, trivial to an army. */
   mine: [
     unit('unit.elementals.stone_elemental', 'Stone Elemental', 'foot'),
     unit('unit.elementals.fire_elemental', 'Fire Elemental', 'ranged'),
   ],
-  /** A lair, ~1.25 armies: two armies, or one and a wizard willing to spend mana. */
+  /**
+   * A connection resource, ~0.53 armies.
+   *
+   * Harder than a town on purpose. A town is the primary expansion mechanism
+   * and has to stay repeatably affordable; a node is optional, permanent, and
+   * buffs every army a city ever fields, so it should cost a real fight. Great
+   * Elf again, because "wild" has to keep reading as wild.
+   */
+  node: [
+    unit('unit.greatElf.treant', 'Treant', 'foot', { hp: 100, dps: 10, scale: 1.2 }),
+    unit('unit.greatElf.satyr', 'Satyr', 'fast'),
+    unit('unit.greatElf.druid', 'Druid', 'ranged'),
+  ],
+  /** A lair, ~0.81 armies: two armies, or one and a wizard willing to spend mana. */
   lair: [
     unit('unit.darkBastion.hell_hound', 'Hell Hound', 'fast'),
     unit('unit.darkBastion.gog', 'Gog', 'ranged'),
@@ -228,7 +276,7 @@ export const GARRISONS: Record<string, UnitDef[]> = {
     unit('unit.darkBastion.pit_fiend', 'Pit Fiend', 'foot', { hp: 90, dps: 9 }),
   ],
   /**
-   * A Point of Power, ~1.9 armies — and it comes back for whoever holds it.
+   * A Point of Power, ~1.21 armies — and it comes back for whoever holds it.
    *
    * Deliberately out of reach of the one army a starting wizard has. Taking a
    * point is the thing a second and third city are *for*.
@@ -240,7 +288,7 @@ export const GARRISONS: Record<string, UnitDef[]> = {
     unit('unit.elementals.diamond_elemental', 'Diamond Elemental', 'foot', { hp: 120, dps: 10 }),
   ],
   /**
-   * The hardest garrison on the map, ~3.8 armies, guarding the central points.
+   * The hardest garrison on the map, ~2.49 armies, guarding the central points.
    * Deliberately not clearable by one army, or by two.
    */
   dragon: [

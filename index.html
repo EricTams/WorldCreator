@@ -602,6 +602,36 @@
         margin-bottom: 6px;
         font-weight: 600;
       }
+      /* The tier, riding along with the name: a city's rank is part of what it
+         is called, not a separate stat worth its own row. */
+      .hud-city-tier {
+        margin-left: 6px;
+        font-weight: 400;
+        font-size: 0.85em;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        opacity: 0.6;
+      }
+      /* Live trade links, listed under the city name. A pending one is dimmed
+         and italic: the wagon is still walking and the buff is not yours yet. */
+      .hud-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        justify-content: center;
+        margin-top: 4px;
+      }
+      .hud-link {
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        font-size: 0.8em;
+        font-weight: 400;
+      }
+      .hud-link.is-pending {
+        opacity: 0.5;
+        font-style: italic;
+      }
       .hud-build-row,
       .hud-queue {
         display: flex;

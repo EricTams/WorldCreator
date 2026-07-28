@@ -6,12 +6,15 @@ import { CardLayer, type CardSpec } from './render/cardLayer'
 import { BoardLayer } from './render/boardLayer'
 import { Effects } from './render/effects'
 import { Banners } from './render/banners'
+import { SiegeEngines } from './render/siege'
 import { CastRange } from './render/castRange'
 import { createScene } from './render/scene'
 import { loadSpriteAtlas, loadUnitAtlas } from './render/spriteAtlas'
 import type { SpriteKey, UnitKey } from './render/spriteAtlas'
-import { Sim, RULES } from './game/sim'
-import type { Army, BuildItem, SiteState } from './game/sim'
+import { Sim } from './game/sim'
+import type { Army, SiteState } from './game/sim'
+import { RULES } from './game/rules'
+import type { BuildItem } from './game/rules'
 import { Hud, SPELLS } from './ui/hud'
 import { FACTIONS } from './game/factions'
 import { planGameMap } from './world/gameMap'
@@ -127,6 +130,9 @@ scene.scene.add(effects.object)
 
 const banners = new Banners()
 scene.scene.add(banners.object)
+// Trebuchets, built from primitives because the art pack has no siege engine.
+const siegeEngines = new SiegeEngines()
+scene.scene.add(siegeEngines.object)
 
 const castRange = new CastRange()
 scene.scene.add(castRange.object)
@@ -163,6 +169,15 @@ const hud = new Hud(document.body, sim, {
   onOrder: (army: Army, siteId: number) => sim.orderArmy(army, siteId),
   onRecall: (army: Army) => sim.recallArmy(army),
   onBuild: (site: SiteState, item: BuildItem) => {
+    // A caravan needs somewhere to go, so the button arms a pick and the next
+    // map click finishes the order — the same two-step an army order uses.
+    if (item === 'caravan') {
+      hud.pendingCaravan = site
+      hud.selectedArmy = -1
+      hud.armedSpell = null
+      hud.message('Pick a resource node for the caravan.')
+      return
+    }
     if (!sim.queueBuild(site, item)) hud.message('Not enough gold.')
   },
   onConvert: (site: SiteState) => {
@@ -1132,6 +1147,23 @@ canvas.addEventListener('pointerup', (e) => {
     return
   }
 
+  // A caravan is waiting for a destination.
+  if (hud.pendingCaravan) {
+    const city = hud.pendingCaravan
+    hud.pendingCaravan = null
+    const target = nearestExploredSite(hit.x, hit.z, (s) => s.kind === 'node')
+    if (!target) {
+      hud.message('No known resource node there.')
+    } else if (!sim.canLinkTo(target.id)) {
+      hud.message(`${target.name} is not free to link — clear it first.`)
+    } else if (!sim.queueBuild(city, 'caravan', target.id)) {
+      hud.message('Not enough gold.')
+    } else {
+      hud.message(`Caravan bound for ${target.name}.`)
+    }
+    return
+  }
+
   // An army is waiting for a target: this click is its order, not a spell.
   if (hud.selectedArmy >= 0) {
     const army = sim.armyById(hud.selectedArmy)
@@ -1156,11 +1188,16 @@ canvas.addEventListener('pointerup', (e) => {
  * works out which. The fog check is what stops an army being sent to a lair
  * nobody has discovered.
  */
-function nearestExploredSite(x: number, z: number): SiteState | null {
+function nearestExploredSite(
+  x: number,
+  z: number,
+  pass?: (s: SiteState) => boolean,
+): SiteState | null {
   const fogOn = params.fog.enabled && !params.fog.revealAll
   let best: SiteState | null = null
   let bestD = 320
   for (const site of sim.sites) {
+    if (pass && !pass(site)) continue
     if (fogOn && fogGrid.exploredAt(site.x, site.z) < 0.18) continue
     const d = Math.hypot(site.x - x, site.z - z)
     if (d < bestD) {
@@ -1219,7 +1256,7 @@ scene.renderer.setAnimationLoop(() => {
   if (frame && sim.ready) {
     sim.update(dt, frame, avatar.position.x, avatar.position.z, avatar.position.y)
     const fogOn = params.fog.enabled && !params.fog.revealAll
-    sim.draw(unitLayer, boardLayer, banners, frame, fogOn ? (x, z) => fogGrid.exploredAt(x, z) : () => 1)
+    sim.draw(unitLayer, boardLayer, banners, siegeEngines, frame, fogOn ? (x, z) => fogGrid.exploredAt(x, z) : () => 1)
     effects.update(sim.projectiles, sim.blasts)
     hud.update(dt)
 
@@ -1269,6 +1306,7 @@ scene.renderer.setAnimationLoop(() => {
   if (keys.consumePress('Escape')) {
     hud.selectedArmy = -1
     hud.armedSpell = null
+    hud.pendingCaravan = null
   }
 
   keys.endFrame()

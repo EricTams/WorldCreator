@@ -1,6 +1,8 @@
 import { FACTIONS } from '../game/factions'
-import { RULES, Sim } from '../game/sim'
-import type { Army, BuildItem, SiteState } from '../game/sim'
+import { Sim } from '../game/sim'
+import type { Army, SiteState } from '../game/sim'
+import { RULES, TIER_NAMES } from '../game/rules'
+import type { BuildItem } from '../game/rules'
 
 /**
  * Everything the player reads while playing.
@@ -24,9 +26,6 @@ export interface HudHandlers {
   onConvert: (site: SiteState) => void
   onRestart: () => void
 }
-
-/** Which of a city's build options to offer, and whether each is available. */
-const BUILD_ORDER: BuildItem[] = ['army', 'fort', 'shrine']
 
 /**
  * The spellbook.
@@ -77,6 +76,14 @@ export class Hud {
 
   /** The army awaiting a target, or -1. The map click handler reads this. */
   selectedArmy = -1
+  /**
+   * A city waiting for the player to point at a node for its caravan.
+   *
+   * The same grammar as an army order — arm it here, resolve it with the next
+   * map click — because a caravan is the only other order that names a place,
+   * and a player who has learned one should not have to learn a second.
+   */
+  pendingCaravan: SiteState | null = null
   /**
    * The spell armed and waiting for a target, or null.
    *
@@ -295,6 +302,9 @@ export class Hud {
     } else if (under && sim.canConvert(w, under)) {
       this.prompt.hidden = false
       this.prompt.innerHTML = `<div class="hud-prompt-note">${under.name} is undefended — <kbd>E</kbd> to consecrate it.</div>`
+    } else if (this.pendingCaravan) {
+      this.prompt.hidden = false
+      this.prompt.innerHTML = `<div class="hud-prompt-note">Click a resource node to link it to <b>${this.pendingCaravan.name}</b>. <kbd>Esc</kbd> to cancel.</div>`
     } else if (this.selectedArmy >= 0) {
       this.prompt.hidden = false
       this.prompt.innerHTML = `<div class="hud-prompt-note">Click the map to send this army. <kbd>Esc</kbd> to cancel.</div>`
@@ -332,8 +342,11 @@ export class Hud {
     const signature = [
       city.id,
       q ? `${q.item}:${Math.ceil(q.remaining)}` : 'idle',
+      city.tier,
       city.fort,
       city.shrine,
+      city.market,
+      sim.linksOf(city.id).map((c) => `${c.nodeSiteId}${c.live ? '!' : '?'}`).join(','),
       Math.floor(w.gold / 5),
       city.army ? Sim.armyStrength(city.army).toFixed(2) : 'none',
     ].join('|')
@@ -341,41 +354,46 @@ export class Hud {
     this.citySignature = signature
     this.city.hidden = false
 
+    const links = sim
+      .linksOf(city.id)
+      .map((c) => {
+        const node = sim.siteById(c.nodeSiteId)
+        if (!node) return ''
+        return `<span class="hud-link${c.live ? '' : ' is-pending'}">${node.name}</span>`
+      })
+      .join('')
+    const title =
+      `${city.name} <span class="hud-city-tier">${TIER_NAMES[city.tier]}</span>` +
+      (links ? `<div class="hud-links">${links}</div>` : '')
+
     if (q) {
       const pct = (1 - q.remaining / q.total) * 100
       this.city.innerHTML = `
-        <div class="hud-city-name">${city.name}</div>
-        <div class="hud-queue">${RULES.city.build[q.item].label}
+        <div class="hud-city-name">${title}</div>
+        <div class="hud-queue">${sim.buildSpec(city, q.item).label}
           <span class="hud-queue-bar"><span style="width:${pct}%"></span></span>
           <span class="hud-queue-time">${Math.ceil(q.remaining)}s</span>
         </div>`
       return
     }
 
-    const buttons = BUILD_ORDER.map((item) => {
-      const spec = RULES.city.build[item]
-      let label: string = spec.label
-      let gold: number = spec.gold
-      let disabled = false
-      if (item === 'fort' && city.fort) disabled = true
-      if (item === 'shrine' && city.shrine) disabled = true
-      if (item === 'army' && city.army) {
-        const missing = 1 - Sim.armyStrength(city.army)
-        if (missing < 0.02) {
-          disabled = true
-          label = 'Army ready'
-        } else {
-          label = 'Reconstitute'
-          gold = Math.max(25, Math.round(spec.gold * missing))
-        }
-      }
-      if (w.gold < gold) disabled = true
-      return `<button class="hud-build" type="button" data-item="${item}" ${
-        disabled ? 'disabled' : ''
-      }>${label}<span>${disabled && label !== spec.label ? '' : `${gold}g`}</span></button>`
-    }).join('')
+    // Both the menu and the reason a button is dead come from the sim, so the
+    // panel can never offer something `queueBuild` would refuse.
+    const buttons = sim
+      .buildOptions(city)
+      .map((item) => {
+        const { gold, label } = sim.buildSpec(city, item)
+        const blocked = sim.buildBlocked(city, item)
+        // "Too costly" is the one refusal worth showing the price for — it is
+        // the only one the player fixes by waiting.
+        const note = !blocked || blocked === 'Too costly' ? `${gold}g` : blocked
+        return `<button class="hud-build" type="button" data-item="${item}" ${
+          blocked ? 'disabled' : ''
+        }>${label}<span>${note}</span></button>`
+      })
+      .join('')
 
-    this.city.innerHTML = `<div class="hud-city-name">${city.name}</div><div class="hud-build-row">${buttons}</div>`
+    this.city.innerHTML = `<div class="hud-city-name">${title}</div><div class="hud-build-row">${buttons}</div>`
     for (const btn of this.city.querySelectorAll('.hud-build')) {
       const el = btn as HTMLButtonElement
       el.onclick = () => {
@@ -517,6 +535,7 @@ export class Hud {
   reset(): void {
     this.selectedArmy = -1
     this.armedSpell = null
+    this.pendingCaravan = null
     this.armySignature = ''
     this.citySignature = ''
     this.end.hidden = true
