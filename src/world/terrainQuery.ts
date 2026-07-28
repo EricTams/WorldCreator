@@ -120,6 +120,59 @@ export function terrainRawHeightAt(frame: TerrainFrame, worldX: number, worldZ: 
   return sampleHeightAndGradient(heightmap.data, heightmap.size, gx, gz).height * heightScale
 }
 
+/**
+ * Height of the surface as it is actually *drawn*, in world units.
+ *
+ * The difference from `terrainHeightAt` is what happens inside one cell. That
+ * one filters the four corners bilinearly, which is a curved surface; the mesh
+ * draws two flat triangles. Between the corners those are not the same surface,
+ * and at this scale the gap is not small — a 2 km island over a 256-cell grid
+ * puts 8 world units between corners, and on a ridge the bilinear value runs
+ * metres above the triangle underneath it.
+ *
+ * Anything that has to lie *flush* with the ground therefore has to ask this
+ * one, or it sinks into the mesh over rough terrain and comes out in pieces.
+ * The avatar's ground shadow is the case this was written for. The corners are
+ * shelved before interpolating, exactly as `fillTile` does it, so the shoreline
+ * bank is where the shadow sees it too.
+ *
+ * The triangulation is mirrored from `terrainMesh.fillTile`, which splits every
+ * cell along the b–c diagonal — the corners at (x+1, z) and (x, z+1). If that
+ * winding ever changes, this has to change with it.
+ */
+export function terrainDrawnHeightAt(frame: TerrainFrame, worldX: number, worldZ: number): number {
+  const { heightmap, cellSize, heightScale, seaLevel, shelfRise, shelfBand } = frame
+  const cells = heightmap.size - 1
+  const half = (cells * cellSize) / 2
+
+  // Clamped to the last *cell* rather than the last vertex: this reads a cell's
+  // four corners, so the origin has to leave one to its east and one to its
+  // south.
+  const max = cells - 1e-4
+  let gx = (worldX + half) / cellSize
+  let gz = (worldZ + half) / cellSize
+  gx = gx < 0 ? 0 : gx > max ? max : gx
+  gz = gz < 0 ? 0 : gz > max ? max : gz
+
+  const ix = Math.floor(gx)
+  const iz = Math.floor(gz)
+  const u = gx - ix
+  const v = gz - iz
+
+  const shelf = (h: number): number => shelfHeight(h, seaLevel, shelfRise, shelfBand)
+
+  // The two triangles meet along u + v = 1: the near one spans the corner at
+  // the cell's origin, the far one the corner diagonally opposite it.
+  const b = shelf(heightmap.getClamped(ix + 1, iz))
+  const c = shelf(heightmap.getClamped(ix, iz + 1))
+  if (u + v <= 1) {
+    const a = shelf(heightmap.getClamped(ix, iz))
+    return (a + (b - a) * u + (c - a) * v) * heightScale
+  }
+  const d = shelf(heightmap.getClamped(ix + 1, iz + 1))
+  return (d + (c - d) * (1 - u) + (b - d) * (1 - v)) * heightScale
+}
+
 /** Height plus the world-space surface derivatives dY/dX and dY/dZ. */
 export function terrainSampleAt(
   frame: TerrainFrame,

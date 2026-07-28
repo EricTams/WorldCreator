@@ -166,47 +166,81 @@ export const NEUTRAL_TINT = 0x9aa4ae
  * has to stay reliable. Great Elf holds the towns, elementals the mines, and the
  * demons of the Dark Bastion the lairs.
  */
+/**
+ * Roughly how hard a group is to kill, for sizing garrisons against armies.
+ *
+ * Lanchester's square law, which is the right model here because everything
+ * targets the nearest enemy and fights to the death: the winner of an attrition
+ * fight is the side with the greater `total damage x total health`, not the
+ * side with more of either alone. Halving a group's health hurts it exactly as
+ * much as halving its damage, and a group with both is four times the problem.
+ *
+ * The bearer contributes health and no damage, so it correctly counts for
+ * nothing here — an army is five fighting units and a flag.
+ *
+ * A standard army measures about 5700. The garrison tables below are written as
+ * multiples of that, which is the only way these numbers mean anything: a lair
+ * is not "325 hit points", it is "one and a quarter armies".
+ */
+export function groupPower(units: readonly UnitDef[]): number {
+  let hp = 0
+  let dps = 0
+  for (const u of units) {
+    if (u.dps <= 0) continue
+    hp += u.hp
+    dps += u.dps
+  }
+  return hp * dps
+}
+
 export const GARRISONS: Record<string, UnitDef[]> = {
-  /** A neutral town. One healthy army clears it; a patient wizard also can. */
+  /**
+   * A neutral town. ~0.55 armies: one healthy army takes it and walks away with
+   * casualties, which is what "the primary expansion mechanism" has to mean.
+   *
+   * This was four defenders including a second archer, and measured out at 0.9
+   * armies — a near-run thing that cost five of six units every time. Expansion
+   * that has to be paid for with a whole army does not happen twice, and the
+   * whole opening of the match is built on it happening repeatedly.
+   */
   town: [
     unit('unit.greatElf.dwarf', 'Dwarf', 'foot'),
     unit('unit.greatElf.hunter', 'Hunter', 'ranged'),
-    unit('unit.greatElf.hunter', 'Hunter', 'ranged'),
     unit('unit.greatElf.deer', 'Stag', 'fast'),
   ],
-  /** A gold vein. Soloable by the wizard with about ten fireballs and some care. */
+  /** A gold vein, ~0.23 armies. Soloable by a careful wizard, trivial to an army. */
   mine: [
     unit('unit.elementals.stone_elemental', 'Stone Elemental', 'foot'),
     unit('unit.elementals.fire_elemental', 'Fire Elemental', 'ranged'),
   ],
-  /** A lair. Needs an army and the wizard supporting it. */
+  /** A lair, ~1.25 armies: two armies, or one and a wizard willing to spend mana. */
   lair: [
     unit('unit.darkBastion.hell_hound', 'Hell Hound', 'fast'),
     unit('unit.darkBastion.gog', 'Gog', 'ranged'),
-    unit('unit.darkBastion.gog', 'Gog', 'ranged'),
-    unit('unit.darkBastion.demon', 'Demon', 'foot'),
     unit('unit.darkBastion.demon', 'Demon', 'foot'),
     unit('unit.darkBastion.pit_fiend', 'Pit Fiend', 'foot', { hp: 90, dps: 9 }),
   ],
-  /** A Point of Power. Lair-grade, and it comes back for whoever holds it. */
+  /**
+   * A Point of Power, ~1.9 armies — and it comes back for whoever holds it.
+   *
+   * Deliberately out of reach of the one army a starting wizard has. Taking a
+   * point is the thing a second and third city are *for*.
+   */
   point: [
     unit('unit.elementals.magma_elemental', 'Magma Elemental', 'foot', { hp: 90, dps: 9 }),
-    unit('unit.elementals.storm_elemental', 'Storm Elemental', 'ranged', { hp: 50 }),
     unit('unit.elementals.storm_elemental', 'Storm Elemental', 'ranged', { hp: 50 }),
     unit('unit.elementals.ice_elemental', 'Ice Elemental', 'fast'),
     unit('unit.elementals.diamond_elemental', 'Diamond Elemental', 'foot', { hp: 120, dps: 10 }),
   ],
   /**
-   * The single hardest garrison on the map, guarding whichever central point
-   * draws `lair.dragonCity`. Deliberately not clearable by one army.
+   * The hardest garrison on the map, ~3.8 armies, guarding the central points.
+   * Deliberately not clearable by one army, or by two.
    */
   dragon: [
     unit('unit.darkBastion.devil', 'Devil', 'foot', { hp: 140, dps: 14, scale: 1.25 }),
     unit('unit.darkBastion.efreet', 'Efreet', 'ranged', { hp: 70, dps: 11 }),
     unit('unit.darkBastion.efreet', 'Efreet', 'ranged', { hp: 70, dps: 11 }),
     unit('unit.darkBastion.pit_fiend', 'Pit Fiend', 'foot', { hp: 90, dps: 9 }),
-    unit('unit.darkBastion.pit_fiend', 'Pit Fiend', 'foot', { hp: 90, dps: 9 }),
-    unit('unit.darkBastion.hell_hound', 'Hell Hound', 'fast'),
     unit('unit.darkBastion.hell_hound', 'Hell Hound', 'fast'),
   ],
 }

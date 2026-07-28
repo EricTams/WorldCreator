@@ -22,7 +22,19 @@ import type { TerrainFrame } from '../world/terrainQuery'
  * crossing them costs four triangles.
  */
 
-/** Pole and cloth in one geometry, standing on y=0, one unit tall. */
+/**
+ * Pole and cloth in one geometry, standing on y=0, one unit tall.
+ *
+ * A square pole and one flat flag — a normal flag. The cloth is a single quad
+ * lying in the XY plane, so its face points due south: gameplay runs with the
+ * view locked north-up and the camera fixed, which means south is *always* where
+ * the viewer is and one quad is broadside to them forever. This is the same
+ * trick the sprite cards use when `uBillboard` is 0, and for the same reason.
+ *
+ * An earlier version crossed two quads so that neither could be caught edge-on.
+ * That solved a problem the fixed camera does not have, and read as a strange
+ * two-winged banner from every angle where both halves showed at once.
+ */
 function makeBannerGeometry(): THREE.BufferGeometry {
   const positions: number[] = []
   const colors: number[] = []
@@ -46,19 +58,22 @@ function makeBannerGeometry(): THREE.BufferGeometry {
     index.push(base, base + 1, base + 2, base, base + 2, base + 3)
   }
 
-  // The pole: a thin cross of two quads, for the same reason the cloth is
-  // crossed — a flat pole disappears when you orbit past it.
-  const t = 0.018
-  quad(-t, 0, 0, t, 0, 0, t, 1, 0, -t, 1, 0, POLE)
-  quad(0, 0, -t, 0, 0, t, 0, 1, t, 0, 1, -t, POLE)
+  // The pole: a square post, four sides. Thin enough to read as timber rather
+  // than as a tower, thick enough to catch the light on one face.
+  const t = 0.014
+  quad(-t, 0, -t, t, 0, -t, t, 1, -t, -t, 1, -t, POLE)
+  quad(t, 0, t, -t, 0, t, -t, 1, t, t, 1, t, POLE)
+  quad(t, 0, -t, t, 0, t, t, 1, t, t, 1, -t, POLE)
+  quad(-t, 0, t, -t, 0, -t, -t, 1, -t, -t, 1, t, POLE)
 
-  // The cloth hangs from the top of the pole. Wide enough to read as a flag at
-  // strategy altitude, short enough not to look like a sail up close.
+  // The cloth: one rectangle, hoisted to the top and flying to +X. Its
+  // proportions are a real flag's — half again as wide as it is tall — and it is
+  // deliberately a fraction of the building it stands over. A banner is a label,
+  // and a label larger than the thing it labels is just an obstruction.
   const top = 0.97
-  const bottom = 0.62
-  const reach = 0.42
-  quad(0, bottom, 0, reach, bottom, 0, reach, top, 0, 0, top, 0, CLOTH)
-  quad(0, bottom, 0, 0, bottom, reach, 0, top, reach, 0, top, 0, CLOTH)
+  const bottom = 0.72
+  const fly = 0.34
+  quad(t, bottom, 0, fly, bottom, 0, fly, top, 0, t, top, 0, CLOTH)
 
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
@@ -72,7 +87,7 @@ export class Banners {
   readonly object = new THREE.Group()
 
   private mesh: THREE.InstancedMesh
-  private material: THREE.MeshLambertMaterial
+  private material: THREE.MeshBasicMaterial
   private capacity: number
   private count = 0
   private frame: TerrainFrame | null = null
@@ -85,7 +100,14 @@ export class Banners {
 
   constructor(capacity = 64) {
     this.capacity = capacity
-    this.material = new THREE.MeshLambertMaterial({
+    // Unlit, deliberately. A banner is an *ownership readout* before it is
+    // scenery: blue has to mean "mine" at a glance, and it has to be the same
+    // blue the HUD prints. Shading it broke exactly that — the cloth faces due
+    // south, the sun does not, so every faction's colour came out darkened by a
+    // different amount depending on where the sun happened to be, and the
+    // player's medium blue read as navy. Fog still applies, so a distant flag
+    // recedes with the landscape instead of floating over it.
+    this.material = new THREE.MeshBasicMaterial({
       vertexColors: true,
       side: THREE.DoubleSide,
       fog: true,

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { Avatar } from './game/avatar'
 import { Keyboard } from './game/input'
-import { createCameraRig, type ViewPreset } from './render/camera'
+import { createCameraRig, type ViewInsets, type ViewPreset } from './render/camera'
 import { CardLayer, type CardSpec } from './render/cardLayer'
 import { BoardLayer } from './render/boardLayer'
 import { Effects } from './render/effects'
@@ -11,7 +11,7 @@ import { loadSpriteAtlas, loadUnitAtlas } from './render/spriteAtlas'
 import type { SpriteKey, UnitKey } from './render/spriteAtlas'
 import { Sim, RULES } from './game/sim'
 import type { Army, BuildItem, SiteState } from './game/sim'
-import { Hud } from './ui/hud'
+import { Hud, SPELLS } from './ui/hud'
 import { FACTIONS } from './game/factions'
 import { planGameMap } from './world/gameMap'
 import type { MapPlan } from './world/gameMap'
@@ -38,7 +38,7 @@ import {
   scatterDecorations,
   settlementLayout,
 } from './world/sites'
-import type { DecoSpot } from './world/sites'
+import type { DecoSpot, SitePad } from './world/sites'
 import { terrainHeightAt } from './world/terrainQuery'
 import { randomSeed } from './world/prng'
 import type { WorkerRequest, WorkerResponse } from './world/protocol'
@@ -65,6 +65,10 @@ scene.scene.add(terrain.group)
 const keys = new Keyboard()
 const avatar = new Avatar()
 scene.scene.add(avatar.object)
+// Added alongside the avatar rather than inside it: the shadow lies on the
+// terrain in world space, and everything in `avatar.object` is measured from a
+// frame that hovers, yaws and scales with the figure.
+scene.scene.add(avatar.shadow.object)
 const compass = new Compass(document.body)
 // Touch movement. It feeds the same movement codes into `keys`, so nothing
 // downstream — the avatar, the fog, the follow camera — knows it exists.
@@ -163,6 +167,11 @@ const hud = new Hud(document.body, sim, {
   onRestart: () => {
     params.seed = randomSeed()
     gui.refreshDisplay()
+    // A new match must open looking at your own wizard. Regenerating on its own
+    // deliberately does *not* move the camera — dragging a terrain slider should
+    // not yank you out of whatever you were inspecting — so starting a match is
+    // the one case that asks for the framing back.
+    reframeOnNextBuild = true
     regenerate()
   },
 })
@@ -211,6 +220,10 @@ function coastShelf(): { shelfRise: number; shelfBand: number } {
 
 function syncAvatarVisibility(): void {
   avatar.object.visible = params.avatar.enabled
+  // The shadow is a sibling, so it doesn't inherit the avatar's visibility —
+  // and hiding the figure has to take its shadow with it, or the map is left
+  // with a dark spot sliding around on ground nothing is standing over.
+  avatar.shadow.object.visible = params.avatar.enabled && params.avatar.shadow
   avatar.setScale(params.avatar.scale)
   rig.follow(params.avatar.enabled && params.avatar.followCamera ? avatar.position : null)
 }
@@ -246,6 +259,8 @@ let baseHeights: Float32Array | null = null
 let current: Heightmap | null = null
 let erosionBusy = false
 let openedOnAvatar = false
+/** Set by "New world": the next build should frame the wizard. See `onRestart`. */
+let reframeOnNextBuild = false
 let stats = {
   genMs: 0,
   erodeMs: 0,
@@ -300,8 +315,9 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     // Open on the avatar rather than the overview — the close third-person
     // framing is the default view now. Only on the very first build, so later
     // regenerates don't yank you back out of whatever you were looking at.
-    if (!openedOnAvatar) {
+    if (!openedOnAvatar || reframeOnNextBuild) {
       openedOnAvatar = true
+      reframeOnNextBuild = false
       if (params.avatar.enabled) rig.apply('follow', params.camera)
     }
   } else {
@@ -385,18 +401,26 @@ function revertErosion(): void {
 /**
  * How wide a settlement is, as a multiple of its town card's width.
  *
- * Sized against the *houses*, not against the town. A town is 64 px and a house
- * 12, so at the shared pixel scale the town is ten world units across and its
- * huts are two. A ring at two town-widths therefore leaves ten units of arc
- * between neighbours — five house-widths of empty grass — and reads as a castle
- * with some sheds near it rather than as a settlement. Pulled in to just clear
- * the town's own footprint, where the houses crowd it the way a village crowds
- * a keep.
+ * These are the ring the buildings stand on, town included — not a band around
+ * something in the middle, because there is nothing in the middle. The plaza the
+ * ring encloses is about two town-widths across, which is room for an army to
+ * form up in without the village reading as a racetrack with a keep on it.
+ *
+ * The band between them is narrow on purpose. A wide band is a blob of houses; a
+ * narrow one is a street with a frontage, and the frontage is what makes the
+ * empty ground inside look enclosed rather than merely unoccupied.
  */
-const VILLAGE_INNER = 0.78
-const VILLAGE_OUTER = 1.35
-/** Margin between the outermost hut and the edge of the levelled terrace. */
-const VILLAGE_MARGIN = 1.18
+const VILLAGE_INNER = 0.92
+const VILLAGE_OUTER = 1.16
+/**
+ * Margin between the village's own footprint and the edge of the levelled
+ * terrace.
+ *
+ * The footprint is the ring plus half a town, since the town now stands *on*
+ * the ring and sweeps its own width as it yaw-billboards. Getting this wrong
+ * shows as the tallest card in the game standing half off its terrace.
+ */
+const VILLAGE_MARGIN = 1.06
 
 /**
  * The placed world: the capitals, the territories they define, and every card
@@ -415,14 +439,15 @@ interface WorldPlan {
   /** The board: who owns which capital, and where the mines and points are. */
   game: MapPlan
   /**
-   * Stand-in cards for the game sites that are *not* cities.
+   * The levelled ground each village stands on, centred on its plaza.
    *
-   * They are never handed to the static card layer — the dynamic one draws them,
-   * because a vein becomes a mine and a disc changes colour. But they still have
-   * to cut a levelled pad and hold the treeline back, and both of those are
-   * computed from a `CardSpec`, so this is the shape they take to ask for them.
+   * Not carried by the town card the way it used to be. A card's pad is centred
+   * on the card, and the town now stands on the rim of its own circle — hanging
+   * the terrace off it would level a disc pushed a full ring-radius north of the
+   * village and leave the southern houses on whatever slope was there. The
+   * clearing belongs to the settlement, so the settlement holds it.
    */
-  gamePads: CardSpec[]
+  plazas: SitePad[]
   /**
    * Capitals whose surroundings stay permanently on the map.
    *
@@ -448,7 +473,7 @@ function planWorld(): WorldPlan | null {
   if (!frame) return null
 
   const townWidth = cards.spriteWidth('city.castle')
-  const clearing = townWidth * VILLAGE_OUTER * VILLAGE_MARGIN
+  const clearing = (townWidth * VILLAGE_OUTER + townWidth * 0.5) * VILLAGE_MARGIN
   const cities = params.biome.enabled
     ? placeCities(params.seed, frame, { count: params.biome.cities, clearing })
     : []
@@ -474,48 +499,58 @@ function planWorld(): WorldPlan | null {
     capitalSprite.set(site.cityIndex, FACTIONS[site.owner].city)
   }
 
-  const sites: CardSpec[] = cities.map((c, i) => ({
-    sprite: capitalSprite.get(i) ?? (BIOMES[c.biome].faction as SpriteKey),
-    x: c.x,
-    z: c.z,
-    // Ownership colour is the dynamic layer's job now: it has to change hands
-    // mid-match, and a card in the static layer cannot. Suppressing the disc
-    // here is what stops the two drawing one on top of the other.
-    discRadius: 0,
-    // One terrace for the whole village — see `CardSpec.clearing`.
-    clearing,
-  }))
-
-  // Satellites sit on the town's terrace, so they neither cut ground of their
-  // own nor push the treeline outward: `padScale: 0` turns off both. They keep
-  // a little legibility, unlike scenery — a cluster of huts is how a settlement
-  // reads from altitude, and letting them shrink away leaves one lonely town.
-  for (const spot of settlementLayout(cities, params.seed, {
+  const settlements = settlementLayout(cities, params.seed, {
     inner: townWidth * VILLAGE_INNER,
     outer: townWidth * VILLAGE_OUTER,
-  })) {
-    sites.push({
-      sprite: spot.sprite as SpriteKey,
-      x: spot.x,
-      z: spot.z,
-      scale: 0.9 + spot.size * 0.25,
-      padScale: 0,
-      discRadius: 0,
-      legibility: 0.5,
-    })
+    townWidth,
+  })
+
+  // Every card in a village stands on the village's terrace, so none of them cut
+  // ground of their own or push the treeline outward: `padScale: 0` turns off
+  // both. That now includes the town — the clearing it used to carry has moved
+  // to `plazas`, which is centred where the village is rather than where its
+  // largest building happens to stand.
+  const sites: CardSpec[] = settlements.map((s) => ({
+    sprite: capitalSprite.get(cities.indexOf(s.city)) ?? (BIOMES[s.city.biome].faction as SpriteKey),
+    x: s.town.x,
+    z: s.town.z,
+    // No tint, and no disc. Ownership is not a property of the map any more —
+    // it changes hands mid-match, and a card in the static layer is written once
+    // and never rewritten. The dynamic layer draws the owner's disc and raises
+    // the banner over it; colouring the card here as well would leave a stale
+    // second opinion under every town that changed hands.
+    discRadius: 0,
+    padScale: 0,
+  }))
+
+  // Houses keep a little legibility, unlike scenery — a cluster of buildings is
+  // how a settlement reads from altitude, and letting them shrink away leaves
+  // one lonely town.
+  for (const s of settlements) {
+    for (const spot of s.buildings) {
+      sites.push({
+        sprite: spot.sprite as SpriteKey,
+        x: spot.x,
+        z: spot.z,
+        scale: 0.9 + spot.size * 0.25,
+        padScale: 0,
+        discRadius: 0,
+        legibility: 0.5,
+      })
+    }
   }
 
-  const gamePads: CardSpec[] = game.sites
-    .filter((s) => s.sprite !== null)
-    .map((s) => ({
-      sprite: s.sprite as SpriteKey,
-      x: s.x,
-      z: s.z,
-      clearing: s.radius,
-    }))
+  // The plazas the villages stand on, plus one apiece for the mines, lairs and
+  // Points of Power. They are the same kind of thing — ground that has been
+  // levelled for something built on it — so they travel together and every
+  // consumer treats them alike.
+  const plazas: SitePad[] = cities.map((c) => ({ x: c.x, z: c.z, radius: clearing }))
+  for (const s of game.sites) {
+    if (s.sprite !== null) plazas.push({ x: s.x, z: s.z, radius: s.radius })
+  }
 
   const owned = cities.filter((c) => c.player).map((c) => ({ x: c.x, z: c.z }))
-  return { cities, field, sites, game, gamePads, owned }
+  return { cities, field, sites, plazas, game, owned }
 }
 
 /**
@@ -574,7 +609,7 @@ function cutSitePads(): void {
   if (!plan) return
   flattenSitePads(current, effectiveCellSize(), [
     ...cards.padsFor(plan.sites),
-    ...cards.padsFor(plan.gamePads),
+    ...plan.plazas,
   ])
   // A new island is a new match. Erosion moves the coastline and so moves every
   // capital, which means the board this match was being played on no longer
@@ -608,12 +643,20 @@ function buildCards(): void {
   // it out.
   const treeWidth = 15 * (cards.scale / 16) * DECO_SCALE_MID
 
+  // A settlement's treeline belongs outside the whole village, so it stands off
+  // the plaza rather than off any one card in it — every village card carries
+  // `padScale: 0` and asks for no ring of its own. `decoRingsFor` is still
+  // consulted for anything else that gets sited later; zero-radius entries are
+  // dropped so the scatter's avoid test isn't walking a list of hundreds of
+  // buildings that block nothing.
+  const clearings = [
+    ...cards.decoRingsFor(sites),
+    ...plan.plazas.map((p) => ({ ...p, radius: p.radius * 1.08 })),
+  ].filter((pad) => pad.radius > 0)
+
   // Rings first: a site's own clearing gets a denser fringe than open country.
   // Then dress the rest of the island, keeping clear of those clearings.
   const seaY = params.shape.seaLevel * params.render.heightScale
-  // The game sites want a treeline of their own, and want the open scatter kept
-  // out of their clearings — a mine standing in a wood is a mine you cannot see.
-  const clearings = [...cards.decoRingsFor(sites), ...cards.decoRingsFor(plan.gamePads)]
   const rings = ringDecorations(clearings, params.seed, field, {
     spacing: treeWidth * 1.35,
   }).filter((spot) => terrainHeightAt(frame, spot.x, spot.z) > seaY + 1)
@@ -927,19 +970,95 @@ if (import.meta.env.DEV) {
 
 // --- loop -------------------------------------------------------------------
 
+/**
+ * How much of the canvas is hidden, and by what.
+ *
+ * Two sources, because they cover different things and neither knows about the
+ * other. `env(safe-area-inset-*)` — republished as custom properties in
+ * index.html — is the hardware: the notch and the home bar. The visual viewport
+ * is the browser's own furniture: the toolbar a phone keeps at the bottom in
+ * landscape, which overlays the page rather than shortening it, since `#app` is
+ * `inset: 0` of the *layout* viewport and that is measured with the bars away.
+ *
+ * The larger of the two wins per edge. They overlap on a phone that has both,
+ * and adding them would double-count the overlap and over-correct.
+ */
+function canvasInsets(w: number, h: number): ViewInsets {
+  const css = getComputedStyle(document.documentElement)
+  const env = (name: string): number => parseFloat(css.getPropertyValue(name)) || 0
+
+  const insets = {
+    left: env('--inset-left'),
+    top: env('--inset-top'),
+    right: env('--inset-right'),
+    bottom: env('--inset-bottom'),
+  }
+
+  const vv = window.visualViewport
+  // Ignore a pinch-zoomed viewport: the page forbids zooming, so a scale other
+  // than 1 is a transient the framing should not chase.
+  if (vv && Math.abs(vv.scale - 1) < 0.01) {
+    insets.left = Math.max(insets.left, vv.offsetLeft)
+    insets.top = Math.max(insets.top, vv.offsetTop)
+    insets.right = Math.max(insets.right, w - vv.offsetLeft - vv.width)
+    insets.bottom = Math.max(insets.bottom, h - vv.offsetTop - vv.height)
+  }
+  return insets
+}
+
 function onResize(): void {
   const w = appEl.clientWidth
   const h = appEl.clientHeight
   scene.resize(w, h)
-  rig.resize(w / Math.max(1, h))
+  rig.resize(w, h, canvasInsets(w, h))
   // The cards' legibility floor is measured in real pixels, so it has to be
   // re-derived whenever the viewport or the field of view changes.
   cards.setViewport(h, rig.camera.fov)
   unitLayer.setViewport(h, rig.camera.fov)
   boardLayer.setViewport(h, rig.camera.fov)
 }
-window.addEventListener('resize', onResize)
+
+// Watch the element, not the window.
+//
+// They are the same box — `#app` is `inset: 0` — but not the same *event*. A
+// phone changes shape at moments the window event reports late, or reports with
+// the dimensions it had a moment ago: turning it from portrait to landscape is
+// the one that matters here, since that is how every phone session starts. A
+// ResizeObserver fires off the box actually changing, so the render buffer
+// follows the screen instead of trailing it, and it covers the cases no resize
+// event fires for at all — a webview's chrome appearing, or the address bar
+// collapsing after the first scroll.
+new ResizeObserver(onResize).observe(appEl)
+// The visual viewport moves without the layout viewport changing at all — a
+// toolbar sliding away uncovers part of the canvas without resizing it — so the
+// observer above never hears about it.
+window.visualViewport?.addEventListener('resize', onResize)
+window.visualViewport?.addEventListener('scroll', onResize)
+// The observer's first callback is a frame away, and the first frame should not
+// be drawn at the renderer's default size.
 onResize()
+
+/**
+ * Register the service worker — see public/sw.js for what it is for.
+ *
+ * Production only. In development the whole point is that a reload shows the
+ * edit you just made, and a worker sitting between the page and the dev server
+ * is a machine for making that untrue.
+ *
+ * The build SHA rides on the URL rather than being baked into the worker, which
+ * is what makes an update land: the browser compares the script *URL* and its
+ * bytes, so a new build is unambiguously a new worker, and the old one's caches
+ * are dropped as it activates. Registered after load so it never competes with
+ * the terrain for the first paint, and a failure is logged rather than thrown —
+ * offline support is a nicety, and the game runs without it.
+ */
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}sw.js?v=${__BUILD_SHA__}`)
+      .catch((err) => console.warn('[sw] registration failed', err))
+  })
+}
 
 rig.fitToWorld(params.mapSize * params.render.cellSize, params.render.heightScale)
 rig.apply('populous')
@@ -1000,6 +1119,15 @@ canvas.addEventListener('pointerup', (e) => {
   const hit = pickGround(e.clientX, e.clientY)
   if (!hit) return
 
+  // A click on the world only ever *completes* something the player has already
+  // started — an army order or an armed spell. A bare click does nothing, which
+  // is what stops looking around from costing mana.
+  if (hud.armedSpell === 'fireball') {
+    hud.armedSpell = null
+    castAtGround(hit)
+    return
+  }
+
   // An army is waiting for a target: this click is its order, not a spell.
   if (hud.selectedArmy >= 0) {
     const army = sim.armyById(hud.selectedArmy)
@@ -1012,10 +1140,7 @@ canvas.addEventListener('pointerup', (e) => {
     } else {
       hud.message('No known site there. Armies march to places, not to points.')
     }
-    return
   }
-
-  castAtGround(hit)
 })
 
 /**
@@ -1120,24 +1245,18 @@ scene.renderer.setAnimationLoop(() => {
 
   if (keys.consumePress('KeyC')) resetCamera()
 
-  // E consecrates whatever the wizard is standing on. A key as well as the
-  // on-screen button because the button is under the cursor's usual resting
-  // place and clicking it should never be the only way in.
-  if (keys.consumePress('KeyE') && wizard && playing && !wizard.dead) {
-    const under = sim.siteUnder(wizard)
-    if (under && sim.canConvert(wizard, under)) sim.beginConvert(wizard, under)
-    else if (under) hud.message(`${under.name} is still defended.`)
+  // The spellbook's hotkeys, read straight off the hotbar's own table so a key
+  // and its on-screen slot can never disagree about what they cast.
+  if (playing) {
+    for (const spell of SPELLS) {
+      if (keys.consumePress(spell.code)) hud.activate(spell.id)
+    }
   }
 
-  // F throws a fireball straight ahead, for playing without a mouse. It aims at
-  // the middle of the screen, which is where the camera is already looking.
-  if (keys.consumePress('KeyF') && playing) {
-    const rect = scene.renderer.domElement.getBoundingClientRect()
-    const hit = pickGround(rect.left + rect.width / 2, rect.top + rect.height / 2)
-    if (hit) castAtGround(hit)
+  if (keys.consumePress('Escape')) {
+    hud.selectedArmy = -1
+    hud.armedSpell = null
   }
-
-  if (keys.consumePress('Escape')) hud.selectedArmy = -1
 
   keys.endFrame()
 

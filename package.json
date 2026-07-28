@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "make-icon": "node tools/makeIcon.mjs",
     "pack-sprites": "node tools/packSprites.mjs",
     "pack-ground": "node tools/packGround.mjs",
     "survey-art": "node tools/surveyArt.mjs",

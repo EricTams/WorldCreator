@@ -12,6 +12,42 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <title>WorldCreator</title>
+    <!--
+      Launched from a home-screen icon, this should be the game and not a page
+      about the game. Without `apple-mobile-web-app-capable` iOS opens the icon
+      in a Safari view complete with a top bar and a bottom toolbar, and since
+      the canvas is full-bleed (viewport-fit=cover, above) that toolbar sits on
+      top of the lower strip of it — which is what put the avatar at the bottom
+      middle of the screen instead of the middle. Standalone removes the bars
+      rather than compensating for them.
+
+      `black-translucent` keeps the status bar out of the layout so the picture
+      still reaches the top edge; the safe-area insets it leaves behind are read
+      by the camera (see render/camera.ts) and framed around.
+
+      Anyone who added the icon before this shipped has to re-add it — iOS
+      decides standalone-or-not when the icon is created, not when it is opened.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="WorldCreator" />
+    <meta name="theme-color" content="#0b0f14" />
+    <!--
+      The bundles are content-hashed and can be cached forever; this file names
+      them and therefore must not be. GitHub Pages serves no headers we control,
+      so this is the only lever available — honestly a weak one, since a
+      standalone iOS app may still hold a copy. The build marker in the corner
+      is the backstop: it tells you when you are looking at a stale one.
+    -->
+    <meta http-equiv="Cache-Control" content="no-cache" />
+    <!--
+      Relative, not root-absolute: the page is served from /WorldCreator/ once
+      deployed and from / by the dev server, and a relative href is correct in
+      both. iOS ignores the manifest's icons and uses the apple-touch-icon.
+    -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icon-180.png" />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%232f6f9e'/%3E%3Cpath d='M0 11l4-5 3 3 3-5 6 7v5H0z' fill='%234a7c3f'/%3E%3Cpath d='M10 4l3 3.5-1.6 1.2L10 4z' fill='%23eef2f5'/%3E%3C/svg%3E"
@@ -19,6 +55,15 @@
     <style>
       :root {
         color-scheme: dark;
+        /* The notch and the home bar, republished as custom properties so the
+           renderer can read them. `env()` is only usable inside CSS, and the
+           camera needs the numbers: the canvas runs full-bleed underneath both
+           (viewport-fit=cover, above), so these are the strips of it nobody can
+           see, and the view has to be centred on what is left. */
+        --inset-top: env(safe-area-inset-top, 0px);
+        --inset-right: env(safe-area-inset-right, 0px);
+        --inset-bottom: env(safe-area-inset-bottom, 0px);
+        --inset-left: env(safe-area-inset-left, 0px);
       }
       html,
       body {
@@ -35,8 +80,16 @@
            lands on it to nobody rather than to pull-to-refresh or pinch-zoom. */
         touch-action: none;
       }
-      canvas {
+      /* The canvas fills its container rather than carrying a pixel size of its
+         own. The renderer sets the drawing buffer and leaves the display size
+         alone (see render/scene.ts), so the picture always covers the screen
+         even on the frame after a rotation, when the measured size is briefly
+         the old one. Without this the canvas laid out at whatever was last
+         measured, pinned to the top-left corner. */
+      #app > canvas {
         display: block;
+        width: 100%;
+        height: 100%;
       }
       .compass {
         position: fixed;
@@ -532,6 +585,68 @@
         opacity: 0.7;
       }
 
+      /* --- Spellbook -----------------------------------------------------
+         Two spells, always both on screen. A spell you own should be visible
+         whether or not it can be cast this second — the greying out is the
+         information, not the absence. */
+      .hud-hotbar {
+        display: flex;
+        gap: 6px;
+      }
+      .hud-spell {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px 6px 7px;
+        border: 1px solid rgba(220, 232, 244, 0.2);
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.6);
+        color: inherit;
+        /* Dimmed until castable. The slot never disappears, so the spellbook is
+           a constant and only its availability moves. */
+        opacity: 0.45;
+        transition: opacity 120ms ease, border-color 120ms ease, background-color 120ms ease;
+      }
+      .hud-spell.is-ready {
+        opacity: 1;
+      }
+      .hud-spell:hover {
+        border-color: rgba(220, 232, 244, 0.45);
+      }
+      .hud-spell.is-armed {
+        opacity: 1;
+        border-color: rgba(226, 101, 58, 0.95);
+        background: rgba(226, 101, 58, 0.28);
+      }
+      .hud-spell-key {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 5px;
+        background: rgba(220, 232, 244, 0.14);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .hud-spell.is-armed .hud-spell-key {
+        background: rgba(255, 255, 255, 0.28);
+      }
+      .hud-spell-text {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        line-height: 1.25;
+      }
+      .hud-spell-name {
+        font-weight: 600;
+      }
+      .hud-spell-cost {
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+        opacity: 0.68;
+      }
+
       .hud-vitals {
         display: grid;
         grid-template-columns: 150px auto 150px auto auto;
@@ -641,6 +756,24 @@
         color: #cfe3f5;
         font-size: 11px;
         user-select: none;
+      }
+      .credits-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      /* Which build is on screen. Quiet enough to ignore while playing, legible
+         enough to read off a phone without zooming — the whole point is that
+         you can answer "did it update?" without a console. */
+      .credits-build {
+        padding: 4px 7px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.55);
+        font-size: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.3px;
+        opacity: 0.6;
+        white-space: nowrap;
       }
       .credits-line {
         display: block;

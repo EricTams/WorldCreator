@@ -4,6 +4,14 @@ import type { CameraParams } from '../world/params'
 
 export type ViewPreset = 'populous' | 'magicCarpet' | 'follow'
 
+/** CSS pixels of each canvas edge hidden behind something. See `resize`. */
+export interface ViewInsets {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
 export interface CameraRig {
   camera: THREE.PerspectiveCamera
   controls: OrbitControls
@@ -21,7 +29,7 @@ export interface CameraRig {
    */
   fitToWorld(extent: number, heightScale: number): void
   apply(preset: ViewPreset, cam?: CameraParams): void
-  resize(aspect: number): void
+  resize(width: number, height: number, insets?: ViewInsets): void
   update(dt: number, cam: CameraParams): void
   /** Seconds since the user last rotated. Exposed for the settling indicator. */
   idleTime(): number
@@ -359,9 +367,48 @@ export function createCameraRig(domElement: HTMLElement): CameraRig {
     orbitTo(presetTarget, extent * 1.05, 38)
   }
 
-  function resize(aspect: number): void {
-    camera.aspect = aspect
-    camera.updateProjectionMatrix()
+  /**
+   * Match the projection to the canvas, and centre it on the part of the canvas
+   * that can actually be seen.
+   *
+   * The canvas is full-bleed on purpose — it runs under the notch and under the
+   * browser's own furniture rather than letterboxing itself away from them. What
+   * follows from that is that the middle of the canvas is not the middle of what
+   * the player is looking at: a phone's bottom toolbar and home indicator cover
+   * the lower strip, so an avatar sitting dead centre of the canvas appears low
+   * on the screen. That is the "avatar at the bottom middle" report.
+   *
+   * `insets` describe how much of each edge is obscured. Rather than shrink the
+   * canvas — which would trade the wrong centre for black bars under the notch —
+   * the frustum is shifted so the orbit target lands at the centre of the clear
+   * area. It stays the same size and shape, so nothing is stretched and nothing
+   * is cropped; the whole picture simply sits where it can be seen.
+   */
+  function resize(width: number, height: number, insets?: ViewInsets): void {
+    const w = Math.max(1, width)
+    const h = Math.max(1, height)
+    camera.aspect = w / h
+
+    // Clamped: an inset reported as most of the screen is a bug in the reporting
+    // rather than a screen that is mostly hidden, and obeying it would fling the
+    // view somewhere unrecoverable.
+    const cap = (v: number, axis: number) => Math.min(Math.max(v, 0), axis * 0.2)
+    const l = cap(insets?.left ?? 0, w)
+    const r = cap(insets?.right ?? 0, w)
+    const t = cap(insets?.top ?? 0, h)
+    const b = cap(insets?.bottom ?? 0, h)
+
+    if (l + r + t + b < 0.5) {
+      camera.clearViewOffset()
+      camera.updateProjectionMatrix()
+      return
+    }
+
+    // Where the target should land, and therefore how far the window into the
+    // frustum has to move to put it there.
+    const cx = (l + (w - r)) / 2
+    const cy = (t + (h - b)) / 2
+    camera.setViewOffset(w, h, w / 2 - cx, h / 2 - cy, w, h)
   }
 
   return {

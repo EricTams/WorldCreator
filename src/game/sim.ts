@@ -473,7 +473,18 @@ export class Sim {
     return Math.hypot(tx - w.x, tz - w.z) <= RULES.fireball.range
   }
 
+  /**
+   * Start consecrating, or carry on if already at it.
+   *
+   * Idempotent, and it has to be: this is called from the AI's decision tick
+   * every 1.5 seconds and from the player's key on every press, and an
+   * unconditional `channelT = 0` meant the ten-second channel was restarted
+   * before it could ever finish. The AI stood on a cleared mine for fourteen
+   * minutes doing exactly that, and a player leaning on E would have done the
+   * same to themselves.
+   */
   beginConvert(w: Wizard, site: SiteState): boolean {
+    if (w.channelSiteId === site.id) return true
     if (!this.canConvert(w, site)) return false
     w.channelSiteId = site.id
     w.channelT = 0
@@ -1224,6 +1235,12 @@ export class Sim {
    * played against yet.
    */
   private flyAi(w: Wizard, dt: number, frame: TerrainFrame): void {
+    // A consecration is a stance: grounded, silent, and it takes ten seconds.
+    // Thinking mid-channel would only ever break it — a fireball cancels the
+    // channel by rule, and re-deciding where to fly is meaningless while the
+    // wizard cannot move.
+    if (w.channelSiteId >= 0) return
+
     w.thinkT -= dt
     if (w.thinkT <= 0) {
       w.thinkT = 1.5
@@ -1311,16 +1328,47 @@ export class Sim {
       }
     }
 
-    const claimable = this.nearestSite(
-      w.x,
-      w.z,
-      (s) => s.owner !== w.faction && s.kind !== 'lair' && this.isCleared(s),
-    )
+    // What my own armies have already taken, first.
+    //
+    // Nearest-cleared-site alone is not good enough and was actively broken:
+    // both AI wizards picked the same distant town, hovered over it trading
+    // fireballs, and left their armies camped on mines that nobody ever claimed.
+    // Eight minutes in, neither had captured anything. An army that clears a
+    // site and is never followed up is the entire economy standing still, so the
+    // site one of my own armies is sitting on outranks anything else on the map.
+    const camps = this.armiesOf(w.faction)
+      .filter((a) => a.order === 'camp')
+      .map((a) => this.siteById(a.targetSiteId))
+      .filter((s): s is SiteState => !!s && s.owner !== w.faction && this.isCleared(s))
+
+    let claimable: SiteState | null = null
+    let bestD = Infinity
+    for (const s of camps) {
+      const d = Math.hypot(s.x - w.x, s.z - w.z)
+      if (d < bestD) {
+        bestD = d
+        claimable = s
+      }
+    }
+
+    // Failing that, anything cleared and close by — a lair the player emptied,
+    // a town whose garrison never came back. Bounded, so this stays opportunism
+    // rather than a cross-map errand.
+    if (!claimable) {
+      const near = this.nearestSite(
+        w.x,
+        w.z,
+        (s) => s.owner !== w.faction && s.kind !== 'lair' && this.isCleared(s),
+      )
+      if (near && Math.hypot(near.x - w.x, near.z - w.z) < 420) claimable = near
+    }
+
     if (claimable) {
       w.goalX = claimable.x
       w.goalZ = claimable.z
-      const here = Math.hypot(w.x - claimable.x, w.z - claimable.z) <= claimable.radius
-      if (here) this.beginConvert(w, claimable)
+      if (Math.hypot(w.x - claimable.x, w.z - claimable.z) <= claimable.radius) {
+        this.beginConvert(w, claimable)
+      }
       return
     }
 
@@ -1379,16 +1427,22 @@ export class Sim {
 
       const tint = site.owner >= 0 ? FACTIONS[site.owner].tint : NEUTRAL_TINT
 
-      // The standard goes up the moment a site changes hands, and stands behind
-      // the building rather than on it: north, because the default view is
-      // locked north-up, so "behind" is a fixed direction and the flag never
-      // ends up in front of the town it belongs to.
+      // The standard goes up the moment a site changes hands.
+      //
+      // A city flies it from the middle of its own clearing. The village is a
+      // ring of buildings around an empty plaza — see `settlementLayout` — and
+      // the plaza is exactly where a town's standard belongs: nothing else is
+      // standing there, and being at the centre means it reads as the whole
+      // settlement's flag rather than one building's.
+      //
+      // Everything else is a single building sitting on its own pad, so its
+      // banner stands just north of it instead of through it.
       if (site.owner >= 0) {
         // Sized against what it stands over: a town card is about ten units
         // tall, so a capital's standard clears the roofline and a mine's clears
         // the headworks, without either becoming the tallest thing on the map.
-        const height = site.kind === 'city' ? 13 : 9
-        banners.push(site.x, site.z - site.radius * 0.42, height, tint, dim)
+        const city = site.kind === 'city'
+        banners.push(site.x, city ? site.z : site.z - site.radius * 0.42, city ? 10 : 8, tint, dim)
       }
       if (site.sprite) {
         const claimed = site.owner >= 0 && site.ownedSprite

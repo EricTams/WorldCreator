@@ -139,10 +139,21 @@ export function createScene(canvasParent: HTMLElement): SceneBundle {
   }
 
   function resize(width: number, height: number): void {
-    // updateStyle must stay on: setPixelRatio scales the drawing buffer, and
-    // without a matching CSS size the canvas lays out at buffer dimensions and
-    // overflows the viewport by the pixel ratio.
-    renderer.setSize(width, height)
+    // Drawing buffer only — `updateStyle: false`. The canvas's *display* size is
+    // CSS's job (it fills `#app`, see index.html), and handing it to this
+    // function instead was a phone bug: `setSize` writes an inline pixel size,
+    // so the canvas was however big the last measurement said, anchored at the
+    // top-left of a full-screen `#app`. Turning the phone from portrait to
+    // landscape resized the window before the measurement caught up, which left
+    // a 390x844 canvas on an 844x390 screen — and the avatar, still dead centre
+    // of the canvas, sitting off the bottom edge of the display.
+    //
+    // Sized by CSS the canvas always covers the screen, so a stale measurement
+    // costs a frame of slightly wrong aspect rather than a view shoved into a
+    // corner. It is also why `setPixelRatio` is safe here: without a CSS size a
+    // canvas lays out at its buffer dimensions and overflows the viewport by the
+    // pixel ratio, which is what the old comment here was guarding against.
+    renderer.setSize(width, height, false)
   }
 
   return {

@@ -300,7 +300,9 @@ export class TerrainMesh {
     }
 
     // Two triangles per cell, wound counter-clockwise seen from +Y so the
-    // upward face is the front face.
+    // upward face is the front face. Split along the b–c diagonal, which
+    // `terrainDrawnHeightAt` mirrors so that decals lying on the ground sample
+    // the surface this actually draws — change one and change the other.
     const quadCount = (vx - 1) * (vz - 1)
     const indices =
       vertexCount > 65535

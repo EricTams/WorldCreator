@@ -28,11 +28,63 @@ export interface HudHandlers {
 /** Which of a city's build options to offer, and whether each is available. */
 const BUILD_ORDER: BuildItem[] = ['army', 'fort', 'shrine']
 
+/**
+ * The spellbook.
+ *
+ * Two spells, and they are the whole list by decision rather than by omission —
+ * see `docs/first-playable.md` §1. Both appear on the hotbar even though they
+ * are cast differently: a spell you own should be visible whether or not you can
+ * use it this second, because "what can I do" is a question about the wizard and
+ * not about the tile underfoot.
+ *
+ * `aim` is the difference between them. Fireball is *armed* by its hotkey and
+ * then thrown at whatever you click, which is what stops a stray click on the
+ * landscape from spending mana. Consecrate takes no target at all — it applies
+ * to the ground the wizard is already standing on — so its key fires it directly.
+ */
+export type Spell = 'fireball' | 'consecrate'
+
+export interface SpellDef {
+  id: Spell
+  name: string
+  key: string
+  code: string
+  aim: 'target' | 'self'
+  hint: string
+}
+
+export const SPELLS: SpellDef[] = [
+  {
+    id: 'fireball',
+    name: 'Fireball',
+    key: '1',
+    code: 'Digit1',
+    aim: 'target',
+    hint: 'Click a target',
+  },
+  {
+    id: 'consecrate',
+    name: 'Consecrate',
+    key: 'E',
+    code: 'KeyE',
+    aim: 'self',
+    hint: 'Claim a cleared site',
+  },
+]
+
 export class Hud {
   readonly element: HTMLElement
 
   /** The army awaiting a target, or -1. The map click handler reads this. */
   selectedArmy = -1
+  /**
+   * The spell armed and waiting for a target, or null.
+   *
+   * Casting is deliberately two steps — hotkey, then click. A click on the world
+   * used to throw a fireball on its own, which meant every attempt to look at
+   * something cost fifteen mana, and mana is the wizard's only resource.
+   */
+  armedSpell: Spell | null = null
 
   private handlers: HudHandlers
   private sim: Sim
@@ -45,6 +97,7 @@ export class Hud {
   private charge: HTMLElement
   private armies: HTMLElement
   private city: HTMLElement
+  private hotbar: HTMLElement
   private prompt: HTMLElement
   private toast: HTMLElement
   private end: HTMLElement
@@ -71,6 +124,7 @@ export class Hud {
       <div class="hud-bottom">
         <div class="hud-prompt" hidden></div>
         <div class="hud-city" hidden></div>
+        <div class="hud-hotbar"></div>
         <div class="hud-vitals">
           <div class="hud-bar hud-bar-hp"><span></span></div>
           <div class="hud-bar-label hud-hp-text"></div>
@@ -94,9 +148,82 @@ export class Hud {
     this.charge = q('.hud-charge')
     this.armies = q('.hud-armies-list')
     this.city = q('.hud-city')
+    this.hotbar = q('.hud-hotbar')
     this.prompt = q('.hud-prompt')
+    this.buildHotbar()
     this.toast = q('.hud-toast')
     this.end = q('.hud-end')
+  }
+
+  /** The hotbar's structure, built once. Only its *state* changes per frame. */
+  private buildHotbar(): void {
+    this.hotbar.innerHTML = SPELLS.map(
+      (sp) => `
+        <button class="hud-spell" type="button" data-spell="${sp.id}" title="${sp.hint}">
+          <span class="hud-spell-key">${sp.key}</span>
+          <span class="hud-spell-text">
+            <span class="hud-spell-name">${sp.name}</span>
+            <span class="hud-spell-cost"></span>
+          </span>
+        </button>`,
+    ).join('')
+
+    for (const node of this.hotbar.querySelectorAll('.hud-spell')) {
+      const el = node as HTMLButtonElement
+      el.onclick = () => this.activate(el.dataset.spell as Spell)
+    }
+  }
+
+  /**
+   * Press a spell. One path for the hotkey and for clicking its slot, so the two
+   * can never drift apart.
+   *
+   * A targeted spell arms and waits; a self-aimed one goes off now. Arming also
+   * clears any army waiting for orders — exactly one thing may be waiting on the
+   * next click, or the click is ambiguous and the player has to guess.
+   */
+  activate(spell: Spell): void {
+    const w = this.sim.player
+    if (this.sim.winner >= 0 || w.dead) return
+    const def = SPELLS.find((s) => s.id === spell)
+    if (!def) return
+
+    if (def.aim === 'target') {
+      this.armedSpell = this.armedSpell === spell ? null : spell
+      if (this.armedSpell) this.selectedArmy = -1
+      return
+    }
+
+    const under = this.sim.siteUnder(w)
+    if (under && this.sim.canConvert(w, under)) this.handlers.onConvert(under)
+    else if (under && under.owner === w.faction) this.message(`${under.name} is already yours.`)
+    else if (under) this.message(`${under.name} is still defended.`)
+    else this.message('Stand on a cleared site to consecrate it.')
+  }
+
+  private refreshHotbar(): void {
+    const sim = this.sim
+    const w = sim.player
+    const under = sim.siteUnder(w)
+
+    for (const node of this.hotbar.querySelectorAll('.hud-spell')) {
+      const el = node as HTMLButtonElement
+      const id = el.dataset.spell as Spell
+      const cost = el.querySelector('.hud-spell-cost') as HTMLElement
+
+      if (id === 'fireball') {
+        const ready = !w.dead && w.mana >= RULES.fireball.mana && w.cooldown <= 0
+        el.classList.toggle('is-armed', this.armedSpell === 'fireball')
+        el.classList.toggle('is-ready', ready)
+        cost.textContent =
+          w.cooldown > 0 ? `${w.cooldown.toFixed(1)}s` : `${RULES.fireball.mana} mana`
+      } else {
+        const ready = !!under && sim.canConvert(w, under)
+        el.classList.toggle('is-armed', w.channelSiteId >= 0)
+        el.classList.toggle('is-ready', ready)
+        cost.textContent = w.channelSiteId >= 0 ? 'casting…' : ready ? under!.name : '—'
+      }
+    }
   }
 
   message(text: string): void {
@@ -161,17 +288,21 @@ export class Hud {
           <span class="hud-channel-bar"><span style="width:${pct}%"></span></span>
         </div>
         <div class="hud-prompt-note">Hold still. Any hit breaks it.</div>`
+    } else if (this.armedSpell) {
+      const def = SPELLS.find((s) => s.id === this.armedSpell)
+      this.prompt.hidden = false
+      this.prompt.innerHTML = `<div class="hud-prompt-note"><b>${def?.name}</b> ready — ${def?.hint}. <kbd>Esc</kbd> to cancel.</div>`
     } else if (under && sim.canConvert(w, under)) {
       this.prompt.hidden = false
-      this.prompt.innerHTML = `<button class="hud-action" type="button">Consecrate ${under.name} <kbd>E</kbd></button>`
-      const btn = this.prompt.querySelector('.hud-action') as HTMLButtonElement
-      btn.onclick = () => this.handlers.onConvert(under)
+      this.prompt.innerHTML = `<div class="hud-prompt-note">${under.name} is undefended — <kbd>E</kbd> to consecrate it.</div>`
     } else if (this.selectedArmy >= 0) {
       this.prompt.hidden = false
       this.prompt.innerHTML = `<div class="hud-prompt-note">Click the map to send this army. <kbd>Esc</kbd> to cancel.</div>`
     } else {
       this.prompt.hidden = true
     }
+
+    this.refreshHotbar()
 
     // Rebuilding the lists is throttled: they are the only part of the HUD that
     // replaces DOM rather than writing to it, and doing that every frame would
@@ -352,6 +483,7 @@ export class Hud {
   /** Wipe transient state when a new match starts on a new island. */
   reset(): void {
     this.selectedArmy = -1
+    this.armedSpell = null
     this.armySignature = ''
     this.citySignature = ''
     this.end.hidden = true

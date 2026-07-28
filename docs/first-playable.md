@@ -45,7 +45,7 @@ On top of the towns, world-gen sprinkles (new placement code, existing art, exis
 
 - **~8 gold mines** — a `vein.gold` card guarded by a small garrison; after Conversion it swaps to `mine.gold` and pays income. One per territory-ish, placed on buildable ground away from towns.
 - **~6 monster lairs** — tier-2/3 garrisons with no economy, guarding the mid-map. Art from the lair set (`lair.keep`, `lair.griffinTower`, `lair.medusaBank`, `lair.dragonCity` for the single hardest one, etc.). Reward: a one-time gold cache (`pickup.chest` on the pad until collected by flying over it).
-- **5 Points of Power** — art `mod.standingStones` (fallback `mod.shrine3`). Two seeded near the player's and AI homelands (one each region), three in the contested middle guarded by the strongest lairs. Placement rule mirrors the full doc's §7.
+- **5 Points of Power** — art `mod.standingStones`. **One per wizard** on the frontier between that wizard's capital and the map centre (45% of the way in — near enough to defend, far enough that holding it is a choice), and the remaining **two in the contested centre**, on a seed-spun ring so the middle is not identical every match. The central pair carry the hardest garrison on the board.
 
 Scale sanity: the island is 2 km across and territories are ~380 m wide. The wizard crosses the island in ~2 min; armies march at **4 m/s** (~8 min edge-to-edge, 1.5–2.5 min for a typical intra-territory march). Those ratios match the full doc's intent (wizard ≈ 4× army speed) without touching the tuned world scale.
 
@@ -74,18 +74,46 @@ The avatar body stays the 3D carpet stand-in. There is no wizard sprite in the p
 ### The two spells
 
 **Fireball** — the always-available attack.
-- Aim: fires toward the reticle/tap point, from the wizard, as a projectile (25 m/s) that detonates on first contact or at target ground.
-- **6 m damage radius, 30 damage** (units near centre die in 1–3 hits; buildings/defense towers take siege-length attrition — see combat numbers, §5).
+- Cast in **two steps: press the hotkey (`1`) to arm it, then click the target.** A bare click on the world does nothing. Arming is what stops looking around from costing mana, and it is the pattern every future spell inherits.
+- Flies as a projectile (25 m/s) that detonates on first contact or at the target ground. At maximum range that is over two seconds in the air — longer than a walking unit needs to leave the blast — so **leading a moving target is a real skill at range and free up close**.
+- **Range 55 m.** Short on purpose: it sits just outside a ranged defender's 40 m reach, so a careful wizard can trade at the edge and a careless one is inside their fire. Unlimited range would let the wizard shell any site down for free and make the armies decorative.
+- **6 m damage radius, 30 damage** (units near centre die in 1–3 hits).
 - **Cost 15 mana, 1.5 s cooldown.** Sustainable rate ~1 cast/7 s on base regen; shrines visibly raise it.
-- VFX is generated, not drawn: an emissive sphere + point light + particle puff from three.js primitives. No art dependency.
+- VFX is generated, not drawn: an emissive sphere + point light from three.js primitives. No art dependency.
 
 **Conversion** — the claim.
 - Valid on a site whose garrison is dead (or a Point of Power/mine likewise cleared) while the wizard is within the site pad.
-- **10 s channel. The wizard lands and cannot move or cast. Taking any hit interrupts** (full doc proposed 15 s + damage threshold; 10 s and any-hit is simpler and reads instantly).
+- Cast with `E` while standing on the site — it takes no target, so it needs no arming step.
+- **10 s channel. The wizard lands and cannot move or cast. Taking any hit interrupts** (full doc proposed 15 s + damage threshold; 10 s and any-hit is simpler and reads instantly). Re-pressing the key while channelling continues it rather than restarting it.
 - Costs no mana — its cost is vulnerability.
 - On completion: site changes ownership (banner/tint), fog keeps it permanently revealed (already how `fogOfWar.ts` treats owned sites), mines start paying, cities start producing, points start charging.
 
 AI wizards use exactly the same two spells under the same costs.
+
+### Controls and the HUD
+
+| Input | Action |
+|---|---|
+| **W A S D** | Fly (world-fixed: W is always north) |
+| **Shift** | Sprint, 1.5×, 4 mana/s |
+| **1** then **click** | Arm Fireball, then throw it at the clicked ground |
+| **E** | Consecrate the site underfoot |
+| **Click an army row**, then **click the map** | Send that army to the nearest known site to the click |
+| **Shift-click an army row** | Recall it home |
+| **Esc** | Cancel an armed spell or a pending order |
+| **C** | Reset the view |
+
+Everything on screen is DOM over the canvas: a **hotbar** listing both spells with their hotkeys (dimmed when they cannot be cast — the greying out is the information, not the absence), the **charge race** for all three wizards at top centre, the **army roster** on the right sorted by distance to the wizard, the **build menu** when standing on your own city, and health/mana/gold at the bottom.
+
+A click on the world only ever *completes* something already started — an armed spell or a pending army order. A bare click does nothing, which is what keeps looking around free.
+
+### Ownership, and the flags
+
+A held site flies its owner's **banner**: a pole and a single flag in the faction's colour, standing in the middle of a city's clearing (the village is a ring of buildings around an empty plaza, so the plaza is exactly where a standard belongs) or just north of a lone mine or point. The player's carpet flies the same colours.
+
+Banners are **generated geometry, not art**, and unlit on purpose — a banner is an ownership readout before it is scenery, so blue has to mean "mine" at a glance and be the same blue the HUD prints. Shading it made every faction's colour depend on where the sun happened to be.
+
+> **Note on the supplied flag art.** The six PNGs in `Real Art Import/Flags/` are not usable as sprites: each is 432×256, fully opaque with no alpha, and contains only 2–3 flat colours forming three plain rounded rectangles — a blank template rather than drawn flags. They are not wired up. When real flag art lands, the banner becomes a card in `boardLayer` and this geometry goes away.
 
 ---
 
@@ -133,10 +161,13 @@ Flag bearer is a non-combatant; if it's the last one standing the army routs hom
 
 Same unit vocabulary, drawn from the unused rosters so neutral reads as "wild":
 
-- **Towns** — 4× `greatElf` mix (dwarf, hunter ×2, deer). Clearable by one healthy army, or by a patient wizard.
-- **Mines** — 2–3 `elementals` (stone/fire). Soloable by the wizard with ~10 fireballs and some dodging.
-- **Lairs** — 5–7 `darkBastion`/`elementals`, includes ranged. Needs an army plus wizard support; `lair.dragonCity` gets the top-end mix.
-- **Points of Power** — lair-grade garrison that **respawns for the current owner** over 3 min, so points are defensible but never free to retake.
+Garrisons are sized in **armies**, not in hit points, using Lanchester's square law (`total HP × total DPS`) — the right model when everything targets the nearest enemy and fights to the death. A standard six-unit army measures ~5700, and `groupPower()` in `factions.ts` computes it, so these stay honest when the numbers move.
+
+- **Towns** — dwarf, hunter, stag (`greatElf`). **~0.55 armies**: one healthy army takes it and walks away having lost a unit or two. Towns are the primary expansion mechanism, so they must be repeatably affordable — an earlier four-unit version measured 0.9 armies and cost five of six units every time, which meant expansion happened once and then stopped.
+- **Mines** — stone + fire `elemental`. **~0.23 armies**: soloable by a wizard who kites, trivial to an army.
+- **Lairs** — hell hound, gog, demon, pit fiend (`darkBastion`). **~1.25 armies**: two armies, or one plus a wizard willing to spend mana.
+- **Points of Power** — 4 `elementals` incl. diamond. **~1.9 armies**, and the guard **respawns for the current owner** over 3 min. Deliberately out of reach of the single army a starting wizard has: taking a point is what a second and third city are *for*.
+- **The central points** — devil, 2 efreet, pit fiend, hell hound. **~3.8 armies**, the wall at the middle of the map.
 
 Garrisons regenerate to full over **5 min** (full doc §4.5), so failed attacks leave a window worth exploiting.
 
@@ -197,9 +228,9 @@ No difficulty settings, no personality, no cheating economy in v1.
 
 ---
 
-## 9. Build order
+## 9. Build order — **all eight steps built**
 
-Each step is playable/verifiable on its own:
+Each step was playable/verifiable on its own, and each is now in the tree. What each one cost, and the bugs worth remembering:
 
 1. **Load the units atlas + card animation driver** — creatures standing at sites, animating Idle. (Renderer only; atlas is already committed.)
 2. **Garrison placement** — towns/mines/lairs/points seeded with defenders and pads; fog already handles reveal.
@@ -210,7 +241,16 @@ Each step is playable/verifiable on its own:
 7. **Points of Power + charge HUD + win screen.**
 8. **AI wizards** — the §7 loop, then a tuning pass on the numbers table.
 
-Steps 1–3 are the risk retirement: they prove sprite-card combat reads well in this renderer. Everything after is systems work on proven ground.
+Steps 1–3 were the risk retirement, and they paid off: sprite-card combat reads well in this renderer.
+
+Four bugs from the build that are worth not re-introducing:
+
+1. **A marching army must press on to its objective.** Halting the column on contact meant a site's ranged defenders — whose reach from the pad exceeds an army unit's reach from its anchor — could stand still and shoot an army that had stopped 80 m short and could never close. Six units went in, one came out, one defender died.
+2. **`beginConvert` has to be idempotent.** It reset the channel timer, and the AI re-called it every 1.5 s, so a ten-second channel never finished — an AI wizard stood on a cleared mine for fourteen minutes. A player leaning on `E` would have done the same to themselves.
+3. **An AI claims what its own armies cleared**, not the nearest cleared thing. Nearest-first sent both AI wizards to the same distant town to trade fireballs while their armies camped on unclaimed mines; neither captured anything in eight minutes.
+4. **`snapFollow()` alone strands the camera.** It sets the lagged pivot equal to the target, which zeroes the frame's delta — and the delta is the only thing that moves the eye. Any teleport (respawn, new match) needs `snapFollow()` *and* `apply('follow')`, the pair the Recall button already used.
+
+A full unattended match now runs about 21 minutes and ends with a winner: the AI wizards expand, take Points of Power, take them off each other, and one of them reaches 100%.
 
 ---
 
@@ -224,7 +264,7 @@ All provisional, gathered here so tuning is one file edit:
 | Wizard HP / regen | 100 / +3 per s in friendly territory |
 | Respawn | 15 s, nearest owned city |
 | Mana | 100 max, +2/s base, +1/s per shrine, +3/s per point |
-| Fireball | 15 mana, 1.5 s cd, 30 dmg, 6 m radius, 25 m/s projectile |
+| Fireball | 15 mana, 1.5 s cd, 30 dmg, 6 m radius, **55 m range**, 25 m/s projectile |
 | Conversion | 10 s channel, grounded, any hit interrupts |
 | Army march | 4 m/s (fast units 8 m/s in combat) |
 | Foot / ranged / fast | 60 HP 6 DPS · 35 HP 8 DPS 40 m · 45 HP 8 DPS |
@@ -232,4 +272,5 @@ All provisional, gathered here so tuning is one file edit:
 | Income | city +10 g/min, mine +15 g/min, cache 100–300 g |
 | Costs | army 100 g/60 s · fort 150 g/90 s · shrine 100 g/60 s |
 | Garrison regen | full over 5 min; point garrisons respawn for owner over 3 min |
+| Garrison strength | town 0.55 armies · mine 0.23 · lair 1.25 · point 1.9 · centre 3.8 |
 | Victory charge | +1%/12 s per held point, persists, 100% instant win |
