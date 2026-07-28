@@ -55,10 +55,17 @@ export interface UnitStats {
  * Melee reach is 2 units — about one body width at the shared pixel scale, so
  * "in range" looks like contact rather than like two figures swinging at each
  * other across a gap.
+ *
+ * Ranged reach is deliberately small, and this is the number the whole combat
+ * scale is built around. A battle has to *fit on screen*: an archer that opened
+ * fire at 40 units started fights well outside the frame at the follow camera,
+ * so the player heard about a battle in the army panel rather than watching one.
+ * At 16 the archers are a visible step behind their own front line rather than
+ * a separate event happening somewhere off-camera.
  */
 export const ARCHETYPE: Record<Role, UnitStats> = {
   foot: { role: 'foot', hp: 60, dps: 6, range: 2, speed: 4, scale: 1 },
-  ranged: { role: 'ranged', hp: 35, dps: 8, range: 40, speed: 4, scale: 1 },
+  ranged: { role: 'ranged', hp: 35, dps: 8, range: 16, speed: 4, scale: 1 },
   // Twice the march speed, which is what lets it get across a fight and onto
   // the enemy's ranged line — the job the full doc gives the fast slot.
   fast: { role: 'fast', hp: 45, dps: 8, range: 2, speed: 8, scale: 1 },
@@ -66,7 +73,7 @@ export const ARCHETYPE: Record<Role, UnitStats> = {
   // bearer is the last one alive", and a bearer that could win a fight on its
   // own would make that unreachable.
   bearer: { role: 'bearer', hp: 40, dps: 0, range: 0, speed: 4, scale: 0.9 },
-  tower: { role: 'tower', hp: 200, dps: 10, range: 60, speed: 0, scale: 1 },
+  tower: { role: 'tower', hp: 200, dps: 10, range: 26, speed: 0, scale: 1 },
 }
 
 export interface UnitDef extends UnitStats {

@@ -55,23 +55,21 @@ export const RULES = {
     damage: 30,
     radius: 6,
     speed: 25,
-    /**
-     * How far the wizard can throw it.
-     *
-     * Short on purpose, and the number that decides what casting *costs*. With
-     * no limit the wizard could stand off past every garrison's reach and shell
-     * a site down for free, which makes the armies decorative — the whole point
-     * of the full doc's "armies destroy defenses, the wizard claims" is that the
-     * wizard cannot do it alone in comfort.
-     *
-     * 55 sits just outside the 40-unit reach of a ranged defender, so a careful
-     * wizard can trade at the edge and a careless one is inside their fire. It
-     * is also far enough that the 25 m/s bolt takes over two seconds to arrive,
-     * which is longer than a walking unit needs to leave the blast radius — so
-     * leading a moving target is a real skill at maximum range and free up close.
-     */
-    range: 55,
   },
+  /**
+   * How far the wizard can reach with anything, in world units.
+   *
+   * One number for the whole spellbook rather than one per spell: the wizard's
+   * reach is a property of the wizard, and two spells with two different ranges
+   * would need two different indicators drawn around them.
+   *
+   * About twice the height the carpet rides at, which is what makes it legible
+   * on screen — the wizard's own hover is the only length the player has an
+   * intuition for. Written as a distance rather than derived from `hover`,
+   * deliberately: tuning the ride height is a look change, and it must not
+   * silently retune what the wizard can hit.
+   */
+  castRange: 15,
   convert: {
     /** Seconds of channel. The wizard is grounded and any hit interrupts. */
     time: 10,
@@ -79,10 +77,27 @@ export const RULES = {
   army: {
     /** March speed. The wizard's 17 m/s is a little over four times this. */
     march: 4,
-    /** How far from its anchor a unit will chase before breaking off. */
-    leash: 60,
-    /** How far a unit looks for something to fight. */
-    aggro: 90,
+    /**
+     * How far from its anchor a unit will chase before breaking off.
+     *
+     * Small, so an army stays a body rather than dissolving into a skirmish
+     * line spread over a hundred units. It is the reason a fight is one thing
+     * you can look at instead of six duels in different postcodes.
+     */
+    leash: 22,
+    /**
+     * How far a unit looks for something to fight.
+     *
+     * The single most important number for how combat *reads*. At 90 an army
+     * and a garrison locked on to each other from two town-widths apart — well
+     * outside the frame at the follow camera — so battles began and often ended
+     * without ever being on screen. At 32 the two sides have to be close enough
+     * that the player watching their wizard can see both.
+     *
+     * Comfortably above the 16-unit ranged reach, so archers still open fire as
+     * they close rather than walking into contact first.
+     */
+    aggro: 32,
   },
   city: {
     income: 10 / 60,
@@ -216,16 +231,25 @@ export interface SimOptions {
   onMessage: (text: string) => void
 }
 
+/**
+ * Where each unit stands relative to its army's anchor.
+ *
+ * Tight — the whole formation is about twelve units across. It was twice this,
+ * which spread six figures over a span wider than the engagement range itself,
+ * so an "army" read as scattered individuals wandering the same field. A clump
+ * reads as a body of troops, and it means the fireball that lands in the middle
+ * of one is worth throwing.
+ */
 const FORMATION: [number, number][] = [
   [0, 0],
-  [6, 3],
-  [-6, 3],
-  [6, -3],
-  [-6, -3],
-  [0, 7],
-  [0, -7],
-  [11, 0],
-  [-11, 0],
+  [3.5, 2],
+  [-3.5, 2],
+  [3.5, -2],
+  [-3.5, -2],
+  [0, 4],
+  [0, -4],
+  [6.5, 0],
+  [-6.5, 0],
 ]
 
 /** Two towers, either side of the pad. */
@@ -396,7 +420,11 @@ export class Sim {
     if (site.kind === 'lair') return false
     if (site.owner === w.faction) return false
     if (!this.isCleared(site)) return false
-    return Math.hypot(w.x - site.x, w.z - site.z) <= site.radius
+    // The same reach as any other spell. It used to be the site's own pad
+    // radius, which meant a wizard could consecrate a city from 48 units out —
+    // further than it can throw a fireball, and far enough that "claiming" did
+    // not require standing on the thing being claimed.
+    return this.inCastRange(w, site.x, site.z)
   }
 
   /** The site a wizard is standing on, if any. */
@@ -442,7 +470,7 @@ export class Sim {
   castFireball(w: Wizard, tx: number, tz: number, ty: number): boolean {
     if (w.dead || w.cooldown > 0) return false
     if (w.mana < RULES.fireball.mana) return false
-    if (!this.inFireballRange(w, tx, tz)) return false
+    if (!this.inCastRange(w, tx, tz)) return false
     // Casting breaks the consecration — it is a channel, not a stance.
     if (w.channelSiteId >= 0) this.cancelChannel(w)
 
@@ -468,9 +496,13 @@ export class Sim {
     return true
   }
 
-  /** Is that point close enough to throw at? Public so the HUD can say why not. */
-  inFireballRange(w: Wizard, tx: number, tz: number): boolean {
-    return Math.hypot(tx - w.x, tz - w.z) <= RULES.fireball.range
+  /**
+   * Is that point close enough to reach? Public so the HUD can say why not, and
+   * so the range indicator drawn on the ground is drawn from the same rule that
+   * enforces it rather than from a second copy of the number.
+   */
+  inCastRange(w: Wizard, tx: number, tz: number): boolean {
+    return Math.hypot(tx - w.x, tz - w.z) <= RULES.castRange
   }
 
   /**
@@ -585,7 +617,11 @@ export class Sim {
    */
   private markHotSites(): void {
     this.hot.clear()
-    const NEAR = 260
+    // Comfortably outside the engagement range, so a garrison is awake and
+    // walking before anything can reach it, but far tighter than it was — this
+    // is the check that keeps a hundred and thirty idle creatures from scanning
+    // for targets they cannot see.
+    const NEAR = 150
     for (const site of this.sites) {
       let hot = false
       for (const w of this.wizards) {
@@ -635,7 +671,7 @@ export class Sim {
         const site = this.siteById(w.channelSiteId)
         if (!site || !this.canConvert(w, site)) {
           this.cancelChannel(w)
-        } else if (Math.hypot(w.x - site.x, w.z - site.z) > site.radius) {
+        } else if (!this.inCastRange(w, site.x, site.z)) {
           // Walked off the pad. Movement cancels — the wizard is grounded for the
           // duration and this is what enforces it for the player, who is driving
           // the avatar directly and cannot be frozen in place without the input
@@ -1037,9 +1073,14 @@ export class Sim {
     if (site) {
       // A tower stands where it was built and never leaves it.
       if (u.tower) return { x: u.x, z: u.z, leash: u.def.range }
-      // The sally leash from the full doc: defenders pursue about 1.5x the pad
-      // and then break off, so a garrison can be pulled apart but not led away.
-      return { x: site.x, z: site.z, leash: site.radius * 1.6 }
+      // The sally leash: defenders come out to meet an attacker and then break
+      // off, so a garrison can be pulled apart but not led away.
+      //
+      // Was 1.6x the pad, which on a 48-unit city let defenders operate 77 units
+      // from home — further than the whole engagement is now wide, so a garrison
+      // fought its battles halfway to the next valley. Under the pad radius, the
+      // defence happens *on the site*, which is where the player is looking.
+      return { x: site.x, z: site.z, leash: site.radius * 0.8 }
     }
     return { x: u.x, z: u.z, leash: RULES.army.leash }
   }
@@ -1253,7 +1294,7 @@ export class Sim {
       let best: { x: number; z: number } | null = null
       // The AI plays by the player's range, not by its own. Reading the rule
       // rather than repeating the number is what keeps that true when it moves.
-      let bestD: number = RULES.fireball.range
+      let bestD: number = RULES.castRange
       for (const u of this.units) {
         if (u.dead || u.owner === w.faction) continue
         const d = Math.hypot(u.x - w.x, u.z - w.z)
@@ -1366,9 +1407,7 @@ export class Sim {
     if (claimable) {
       w.goalX = claimable.x
       w.goalZ = claimable.z
-      if (Math.hypot(w.x - claimable.x, w.z - claimable.z) <= claimable.radius) {
-        this.beginConvert(w, claimable)
-      }
+      if (this.inCastRange(w, claimable.x, claimable.z)) this.beginConvert(w, claimable)
       return
     }
 

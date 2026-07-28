@@ -6,6 +6,7 @@ import { CardLayer, type CardSpec } from './render/cardLayer'
 import { BoardLayer } from './render/boardLayer'
 import { Effects } from './render/effects'
 import { Banners } from './render/banners'
+import { CastRange } from './render/castRange'
 import { createScene } from './render/scene'
 import { loadSpriteAtlas, loadUnitAtlas } from './render/spriteAtlas'
 import type { SpriteKey, UnitKey } from './render/spriteAtlas'
@@ -126,6 +127,9 @@ scene.scene.add(effects.object)
 
 const banners = new Banners()
 scene.scene.add(banners.object)
+
+const castRange = new CastRange()
+scene.scene.add(castRange.object)
 // The player flies their own colours, and every banner they raise matches.
 avatar.setFactionColor(FACTIONS[0].tint)
 
@@ -1170,7 +1174,7 @@ function nearestExploredSite(x: number, z: number): SiteState | null {
 function castAtGround(hit: { x: number; y: number; z: number }): void {
   const w = sim.player
   if (w.dead) return
-  if (!sim.inFireballRange(w, hit.x, hit.z)) {
+  if (!sim.inCastRange(w, hit.x, hit.z)) {
     hud.message('Out of range — fly closer.')
     return
   }
@@ -1218,6 +1222,15 @@ scene.renderer.setAnimationLoop(() => {
     sim.draw(unitLayer, boardLayer, banners, frame, fogOn ? (x, z) => fogGrid.exploredAt(x, z) : () => 1)
     effects.update(sim.projectiles, sim.blasts)
     hud.update(dt)
+
+    // Only while a spell is waiting on a click. Drawn permanently it is a ring
+    // that follows you everywhere and stops meaning anything; drawn on arming it
+    // answers the question the player is asking at exactly that moment.
+    if (hud.armedSpell && !frozen) {
+      castRange.show(frame, avatar.position.x, avatar.position.z, RULES.castRange)
+    } else {
+      castRange.hide()
+    }
   }
 
   if (frame && params.fog.enabled && !params.fog.revealAll) {

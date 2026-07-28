@@ -76,13 +76,14 @@ The avatar body stays the 3D carpet stand-in. There is no wizard sprite in the p
 **Fireball** — the always-available attack.
 - Cast in **two steps: press the hotkey (`1`) to arm it, then click the target.** A bare click on the world does nothing. Arming is what stops looking around from costing mana, and it is the pattern every future spell inherits.
 - Flies as a projectile (25 m/s) that detonates on first contact or at the target ground. At maximum range that is over two seconds in the air — longer than a walking unit needs to leave the blast — so **leading a moving target is a real skill at range and free up close**.
-- **Range 55 m.** Short on purpose: it sits just outside a ranged defender's 40 m reach, so a careful wizard can trade at the edge and a careless one is inside their fire. Unlimited range would let the wizard shell any site down for free and make the armies decorative.
+- **Range 15 m — the shared cast range, used by both spells.** One number for the whole spellbook, because reach is a property of the wizard and two ranges would need two rings drawn round him. It is about twice the height the carpet rides at, which is the only length the player has an intuition for; it is written as a distance rather than derived from `hover`, so retuning the ride height cannot silently retune what the wizard can hit.
+- While a spell is armed, a **dashed ring is drawn on the ground** at exactly that radius, sampled onto the terrain so it follows slopes. Range was previously invisible and only announced itself as a refusal after a wasted click.
 - **6 m damage radius, 30 damage** (units near centre die in 1–3 hits).
 - **Cost 15 mana, 1.5 s cooldown.** Sustainable rate ~1 cast/7 s on base regen; shrines visibly raise it.
 - VFX is generated, not drawn: an emissive sphere + point light from three.js primitives. No art dependency.
 
 **Conversion** — the claim.
-- Valid on a site whose garrison is dead (or a Point of Power/mine likewise cleared) while the wizard is within the site pad.
+- Valid on a site whose garrison is dead (or a Point of Power/mine likewise cleared) while the wizard is **within the same 15 m cast range of the site's centre** — you have to stand on the thing you are claiming, not merely inside its pad.
 - Cast with `E` while standing on the site — it takes no target, so it needs no arming step.
 - **10 s channel. The wizard lands and cannot move or cast. Taking any hit interrupts** (full doc proposed 15 s + damage threshold; 10 s and any-hit is simpler and reads instantly). Re-pressing the key while channelling continues it rather than restarting it.
 - Costs no mana — its cost is vulnerability.
@@ -175,6 +176,8 @@ Garrisons regenerate to full over **5 min** (full doc §4.5), so failed attacks 
 
 Deliberately dumb: every unit has HP, DPS, range, speed; targets the nearest enemy; walks (via terrain-aware straight-line steering, no pathfinding grid in v1 — the island's passes are wide and armies may take ugly routes; fix only if it actually looks broken) and attacks. Melee range 2 m, ranged 40 m. Baseline: foot 60 HP / 6 DPS, ranged 35 HP / 8 DPS, fast 45 HP / 8 DPS + 2× speed, towers 200 HP / 10 DPS / 60 m.
 
+**The combat scale is tight on purpose, and it is a readability decision before it is a balance one.** Units look for a fight at **32 m** and chase at most **22 m** from their formation; archers reach **16 m**, towers **26 m**, and a garrison sallies no further than 0.8× its pad. An earlier pass had those at 90 / 60 / 40 / 60 / 1.6×, which meant an army and a garrison locked on from two town-widths apart — well outside the frame at the follow camera — so battles began and often finished without ever being on screen. The army formation is about twelve units across for the same reason: a clump reads as a body of troops, and it makes an area-effect fireball worth throwing.
+
 Rendering: animated cards from the units atlas — Walk when moving, Attack in range, Damage flash, Death then despawn. Idle otherwise. The five rows exist per creature; the driver is the new code.
 
 ### Command model
@@ -264,11 +267,13 @@ All provisional, gathered here so tuning is one file edit:
 | Wizard HP / regen | 100 / +3 per s in friendly territory |
 | Respawn | 15 s, nearest owned city |
 | Mana | 100 max, +2/s base, +1/s per shrine, +3/s per point |
-| Fireball | 15 mana, 1.5 s cd, 30 dmg, 6 m radius, **55 m range**, 25 m/s projectile |
+| Fireball | 15 mana, 1.5 s cd, 30 dmg, 6 m radius, 25 m/s projectile |
+| Cast range (both spells) | 15 m, shown as a dashed ring while a spell is armed |
 | Conversion | 10 s channel, grounded, any hit interrupts |
 | Army march | 4 m/s (fast units 8 m/s in combat) |
-| Foot / ranged / fast | 60 HP 6 DPS · 35 HP 8 DPS 40 m · 45 HP 8 DPS |
-| Tower | 200 HP, 10 DPS, 60 m range |
+| Foot / ranged / fast | 60 HP 6 DPS · 35 HP 8 DPS 16 m · 45 HP 8 DPS |
+| Tower | 200 HP, 10 DPS, 26 m range |
+| Engagement | aggro 32 m · chase leash 22 m · garrison sally 0.8× pad |
 | Income | city +10 g/min, mine +15 g/min, cache 100–300 g |
 | Costs | army 100 g/60 s · fort 150 g/90 s · shrine 100 g/60 s |
 | Garrison regen | full over 5 min; point garrisons respawn for owner over 3 min |
