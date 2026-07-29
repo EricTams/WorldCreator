@@ -108,10 +108,23 @@ export const RULES = {
        */
       repair: { gold: 0, time: 45, label: 'Repair', tier: 1 },
     },
-    /** Cost and time to reach the next tier, indexed by the tier being left. */
+    /**
+     * Cost and time to reach the next tier, indexed by the tier being left.
+     *
+     * City was 400 and is now 300 — the one price this milestone moved, and the
+     * only one it needed to. Tier 3 gates the Siege Works, which gates the
+     * trebuchet, so 400 was the first of three payments totalling nine hundred
+     * gold before an engine could exist at all; measured over eight unattended
+     * matches, half the wizards never made the first one. At 300 the ladder
+     * reaches tier 3 for twelve wizards in twenty-four rather than ten, the
+     * earliest by minute eleven, and engines start appearing in matches nobody
+     * is steering. `second-playable.md` §10 offered this as one of three guesses
+     * at the pacing problem; it turned out not to be the problem, but it is a
+     * real part of the fix.
+     */
     tierUp: [
       { gold: 200, time: 90 },
-      { gold: 400, time: 120 },
+      { gold: 300, time: 120 },
     ],
   },
   mine: { income: 15 / 60 },
@@ -130,12 +143,89 @@ export const RULES = {
     horseMarch: 1.3,
     /** Reconstitution cost and time multiplier at a Granary-linked city. */
     granaryRecon: 0.6,
+    /**
+     * What a Ley-Spring-linked city's Shrine is worth, as a multiple.
+     *
+     * The one node that is worth nothing on its own: no Shrine, no effect. That
+     * is deliberate — it is the first connection whose value depends on what
+     * has already been built, which makes linking it a decision about the city
+     * rather than a decision about the map.
+     */
+    leyShrine: 2,
+    /** Trebuchet cost and build-time multiplier at an Ironwood-linked city. */
+    ironwoodCost: 0.6,
+    /** Trebuchet health multiplier at an Ironwood-linked city. */
+    ironwoodHp: 1.5,
+    /**
+     * Crystal Fissure: extra wizard max mana, and like a Ley Spring it needs
+     * the linked city to have a Shrine — the pool is a property of what you
+     * have built, not of what you have merely walked past.
+     */
+    crystalMana: 25,
+    /** Gem Pit: health multiplier on this city's army — Mithril's mirror. */
+    gemHp: 1.3,
+    /** Sulfur Vent: damage multiplier on this city's ranged unit only. */
+    sulfurRanged: 1.5,
+    /** Quicksilver Spring: build-time multiplier for everything this city makes. */
+    quicksilverTime: 0.75,
   },
   caravan: {
     /** Wagon health. Unarmed: anything hostile kills it in seconds. */
     hp: 60,
     /** Wagon speed, slower than a marching army. */
     speed: 3,
+  },
+  /**
+   * What holding each monument is worth, for as long as you hold it.
+   *
+   * Every one of these pays the *wizard* rather than a city, which is the axis
+   * the board was missing: a node buffs the town it supplies and a mine feeds
+   * the gold pile, so until now the only thing on the map addressed to the one
+   * piece the player actually controls was a Point of Power.
+   *
+   * They answer eight different questions on purpose — cast more, hit more
+   * often, survive more, see more, come back closer, come back sooner, claim
+   * faster, earn more — so which monument is worth a march is a decision rather
+   * than a strictly-better list.
+   *
+   * Nothing here regrows a garrison. A monument you hold is defended by
+   * whatever you left standing on it and by nothing else, which is what makes
+   * an outpost next door worth taking.
+   */
+  monument: {
+    /** Temple: mana a second, on top of the base 2 and any shrines. */
+    templeMana: 3,
+    /** Oasis: what the wizard's health ceiling becomes. */
+    oasisHp: 150,
+    /** Observatory: world units of map kept permanently revealed. */
+    observatoryReveal: 400,
+    /** Library: seconds to respawn, instead of `wizard.respawn`. */
+    libraryRespawn: 7,
+    /** Sphinx: multiplier on the consecration channel. */
+    sphinxConvert: 0.5,
+    /** Standing Shrine: multiplier on the fireball cooldown. */
+    shrineCooldown: 0.6,
+    /** Wayfarers' Post: extra gold per second, for every city you own. */
+    tradingPostIncome: 5 / 60,
+  },
+  /**
+   * Hiring a patrol at an outpost.
+   *
+   * The first place a wizard turns gold straight into soldiers without a city
+   * queue. Priced off `groupPower` so the six outposts are comparable by the
+   * same measure the garrison tables are written in, rather than by six numbers
+   * chosen one at a time.
+   *
+   * A patrol that dies is gone: replacing it is a fresh purchase, which makes
+   * an outpost a running cost rather than a fortification you buy once.
+   */
+  outpost: {
+    /** Gold per 1,000 of `groupPower`, rounded to the nearest 5. */
+    goldPerPower: 55,
+    /** Radius of the circuit a patrol walks around its outpost. */
+    beat: 100,
+    /** Seconds to walk a full lap, which sets how fast it moves round it. */
+    lap: 90,
   },
   siege: {
     /** The escorting army's march multiplier while a trebuchet lives. */

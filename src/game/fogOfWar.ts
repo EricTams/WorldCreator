@@ -24,7 +24,10 @@ export class FogOfWar {
 
   /**
    * @param altitude height above sea level, for the flying sight bonus.
-   * @param sites world positions that keep a permanent radius revealed.
+   * @param sites world positions that keep a permanent radius revealed. Each
+   *        may name its own `radius`; without one it gets `p.siteRadius`. A
+   *        held Observatory reveals far more ground than a town does, and that
+   *        difference is the whole of what the monument is.
    * @returns whether the grid changed, so the caller can skip re-culling.
    */
   update(
@@ -34,7 +37,7 @@ export class FogOfWar {
     z: number,
     altitude: number,
     heightScale: number,
-    sites: readonly { x: number; z: number }[],
+    sites: readonly { x: number; z: number; radius?: number }[],
   ): boolean {
     if (!p.enabled) return false
 
@@ -54,7 +57,7 @@ export class FogOfWar {
     this.grid.beginTick()
     this.grid.reveal(x, z, radius)
     // Settlements you own stay on the map once found.
-    for (const s of sites) this.grid.reveal(s.x, s.z, p.siteRadius, true)
+    for (const s of sites) this.grid.reveal(s.x, s.z, s.radius ?? p.siteRadius, true)
     return true
   }
 }

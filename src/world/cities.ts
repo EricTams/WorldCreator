@@ -59,6 +59,16 @@ export interface CityParams {
    * a quarry.
    */
   clearing: number
+  /**
+   * Ground already spoken for, which no capital may stand on.
+   *
+   * The Points of Power are placed before the cities — they are the victory
+   * condition and the most contested ground on the board, so they pick first
+   * and everything else fits around them. A capital cannot be moved once it
+   * has a village and a territory, so the only way to give the points first
+   * refusal is to tell city placement where they went.
+   */
+  reserved?: readonly { x: number; z: number; radius: number }[]
 }
 
 /**
@@ -201,6 +211,7 @@ function surveyIsland(
   frame: TerrainFrame,
   rng: () => number,
   clearing: number,
+  reserved: readonly { x: number; z: number; radius: number }[] = [],
 ): Survey {
   const half = worldHalfExtent(frame)
   const step = (half * 2) / GRID
@@ -223,6 +234,18 @@ function surveyIsland(
       }
       const s = scoreSite(frame, x, z, clearing)
       score[k] = s < 0 ? -1 : s * jitter
+      // Ground the Points of Power already took. Marked in `score` rather than
+      // filtered later because every stage below — the best-first pick, the
+      // relaxation in `siteNear`, the split — reads this one grid, so blocking
+      // a cell here blocks it everywhere without teaching three algorithms
+      // about points. `land` is deliberately untouched: the territory still
+      // covers that ground, no capital may merely stand on it.
+      for (const r of reserved) {
+        if (Math.hypot(r.x - x, r.z - z) < r.radius) {
+          score[k] = -1
+          break
+        }
+      }
     }
   }
 
@@ -505,7 +528,7 @@ function colourTerritories(
 export function placeCities(seed: string, frame: TerrainFrame, p: CityParams): City[] {
   const rng = makeRng(seed, 'cities')
   const count = Math.max(1, p.count)
-  const survey = surveyIsland(frame, rng, p.clearing)
+  const survey = surveyIsland(frame, rng, p.clearing, p.reserved)
   if (survey.landCells === 0) return []
 
   // --- stage 1: the best sites, spread out ---------------------------------

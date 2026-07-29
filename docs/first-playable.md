@@ -162,13 +162,15 @@ Flag bearer is a non-combatant; if it's the last one standing the army routs hom
 
 Same unit vocabulary, drawn from the unused rosters so neutral reads as "wild":
 
-Garrisons are sized in **armies**, not in hit points, using Lanchester's square law (`total HP × total DPS`) — the right model when everything targets the nearest enemy and fights to the death. A standard six-unit army measures ~5700, and `groupPower()` in `factions.ts` computes it, so these stay honest when the numbers move.
+Garrisons are sized in **armies**, not in hit points, using Lanchester's square law (`total HP × total DPS`) — the right model when everything targets the nearest enemy and fights to the death. `groupPower()` in `factions.ts` computes it, so these stay honest when the numbers move.
 
-- **Towns** — dwarf, hunter, stag (`greatElf`). **~0.55 armies**: one healthy army takes it and walks away having lost a unit or two. Towns are the primary expansion mechanism, so they must be repeatably affordable — an earlier four-unit version measured 0.9 armies and cost five of six units every time, which meant expansion happened once and then stopped.
-- **Mines** — stone + fire `elemental`. **~0.23 armies**: soloable by a wizard who kites, trivial to an army.
-- **Lairs** — hell hound, gog, demon, pit fiend (`darkBastion`). **~1.25 armies**: two armies, or one plus a wizard willing to spend mana.
-- **Points of Power** — 4 `elementals` incl. diamond. **~1.9 armies**, and the guard **respawns for the current owner** over 3 min. Deliberately out of reach of the single army a starting wizard has: taking a point is what a second and third city are *for*.
-- **The central points** — devil, 2 efreet, pit fiend, hell hound. **~3.8 armies**, the wall at the middle of the map.
+> **Corrected.** This section originally put a standard six-unit army at ~5,700 and scaled every multiple below to it. Measured against the shipped `ARCHETYPE` numbers it is **8,840** (260 HP × 34 DPS, the bearer correctly counting for nothing), so every "armies" figure below reads high by about half. No garrison changed and none needs to — they play well, which is the evidence that counts. See `second-playable.md` §1 for the corrected table, and `third-playable.md` §9 for the camp that was added later.
+
+- **Towns** — dwarf, hunter, stag (`greatElf`). ~0.55 armies as written here; **0.35** measured. One healthy army takes it and walks away having lost a unit or two. Towns are the primary expansion mechanism, so they must be repeatably affordable — an earlier four-unit version cost five of six units every time, which meant expansion happened once and then stopped.
+- **Mines** — stone + fire `elemental`. ~0.23 as written; **0.15** measured. Soloable by a wizard who kites, trivial to an army.
+- **Lairs** — hell hound, gog, demon, pit fiend (`darkBastion`). ~1.25 as written; **0.81** measured. Two armies, or one plus a wizard willing to spend mana.
+- **Points of Power** — 4 `elementals` incl. diamond. ~1.9 as written; **1.21** measured, and the guard **respawns for the current owner** over 3 min. Out of reach of the single army a starting wizard has: taking a point is what a second and third city are *for*.
+- **The central points** — devil, 2 efreet, pit fiend, hell hound. ~3.8 as written; **2.49** measured, the wall at the middle of the map.
 
 Garrisons regenerate to full over **5 min** (full doc §4.5), so failed attacks leave a window worth exploiting.
 

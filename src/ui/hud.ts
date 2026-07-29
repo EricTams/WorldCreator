@@ -23,6 +23,8 @@ export interface HudHandlers {
   onOrder: (army: Army, siteId: number) => void
   onRecall: (army: Army) => void
   onBuild: (site: SiteState, item: BuildItem) => void
+  /** Buy the patrol an outpost sells. */
+  onHire: (site: SiteState) => void
   onConvert: (site: SiteState) => void
   onRestart: () => void
 }
@@ -320,11 +322,110 @@ export class Hud {
     this.rebuildT -= dt
     if (this.rebuildT <= 0) {
       this.rebuildT = 0.25
-      this.refreshCity(under)
+      this.refreshSite(under)
       this.refreshArmies()
     }
 
     if (sim.winner >= 0 && this.end.hidden) this.showEnd(sim.winner)
+  }
+
+  /**
+   * The panel for whatever the wizard is standing on.
+   *
+   * It used to show for one thing only — a city you already owned — so every
+   * other site on the board answered a click with a single line of prompt text
+   * and nothing else. A resource node could not tell you that a caravan was the
+   * missing piece, and a lair could not tell you why `E` did nothing, which is
+   * exactly the confusion behind two of the AI traps the docs list.
+   *
+   * Everything below is derived from sim queries, the way the build row already
+   * was, so the panel can never claim something the sim would refuse.
+   */
+  private refreshSite(under: SiteState | null): void {
+    if (under && under.kind !== 'city') {
+      this.refreshOther(under)
+      return
+    }
+    this.refreshCity(under)
+  }
+
+  /** Name, state, and what to do next — for every site that is not a city. */
+  private refreshOther(site: SiteState): void {
+    const sim = this.sim
+    const w = sim.player
+    const mine = site.owner === w.faction
+    const cleared = sim.isCleared(site)
+
+    const signature = [
+      site.id,
+      site.owner,
+      cleared,
+      site.defenders.filter((u) => !u.dead).length,
+      sim.linksOf(site.id).map((c) => `${c.homeSiteId}${c.live ? '!' : '?'}`).join(','),
+      Math.floor(w.gold / 5),
+    ].join('|')
+    if (signature === this.citySignature) return
+    this.citySignature = signature
+    this.city.hidden = false
+
+    const stars = sim.starsOf(site)
+    const title =
+      `${site.name}` +
+      (stars > 0 ? ` <span class="hud-stars">${'★'.repeat(stars)}${'☆'.repeat(5 - stars)}</span>` : '')
+
+    let body: string
+    if (site.kind === 'lair' || site.kind === 'camp') {
+      // Say plainly why consecrating is not on offer. This is invisible today
+      // and it is the whole of first-playable trap #3.
+      body = cleared
+        ? 'Burnt out. Nobody holds this — collect what fell and move on.'
+        : 'Burn it for the gold it is sitting on. No one holds this ground.'
+    } else if (!cleared) {
+      body = `Defended. Send an army to clear it.`
+    } else if (!mine) {
+      body = `Cleared — <kbd>E</kbd> to consecrate it.`
+    } else if (site.kind === 'node') {
+      const link = sim.linksOf(site.id)[0]
+      const home = link ? sim.siteById(link.homeSiteId) : null
+      const boon = sim.nodeBoon(site)
+      if (link?.live && home) body = `Supplying <b>${home.name}</b> — ${boon}.`
+      else if (link && home) body = `A caravan from <b>${home.name}</b> is on its way.`
+      else {
+        // The caravan requirement, stated at the place it applies. It is also
+        // the only place in the game that names what a node actually does.
+        body = `Yours, but idle. Send a <b>caravan</b> from one of your cities to choose which one gets ${boon}.`
+      }
+    } else if (site.kind === 'outpost') {
+      const spec = sim.patrolSpec(site)
+      body = spec.blocked === 'Patrol on duty' ? 'Its patrol is walking its rounds.' : ''
+      const note = !spec.blocked || spec.blocked === 'Too costly' ? `${spec.gold}g` : spec.blocked
+      this.city.innerHTML =
+        `<div class="hud-city-name">${title}</div>` +
+        (body ? `<div class="hud-site-note">${body}</div>` : '') +
+        `<div class="hud-build-row"><button class="hud-build" type="button" data-hire="1" ${
+          spec.blocked ? 'disabled' : ''
+        }>${spec.label}<span>${note}</span></button></div>`
+      const btn = this.city.querySelector('.hud-build') as HTMLButtonElement | null
+      if (btn) {
+        btn.onclick = () => {
+          this.handlers.onHire(site)
+          this.citySignature = ''
+          this.rebuildT = 0
+        }
+      }
+      return
+    } else if (site.kind === 'monument') {
+      body = `Held — ${sim.monumentBoon(site)}.`
+    } else if (site.kind === 'mine') {
+      body = 'Yours. It pays into the treasury for as long as you hold it.'
+    } else if (site.kind === 'point') {
+      body = 'Yours. It charges your victory while you hold it.'
+    } else {
+      body = 'Yours.'
+    }
+
+    this.city.innerHTML =
+      `<div class="hud-city-name">${title}</div><div class="hud-site-note">${body}</div>`
   }
 
   private refreshCity(under: SiteState | null): void {

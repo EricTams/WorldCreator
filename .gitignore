@@ -5,6 +5,10 @@ dist
 *.local
 .vite
 
+# Harness output. `npm run match --json` writes here; the numbers worth keeping
+# are the ones transcribed into docs/third-playable.md, not the raw rows.
+runs/
+
 # Art-direction reference shots. Same reasoning as TempArt below: they're
 # other people's art, kept locally to look at rather than to ship.
 sample level art/

@@ -1,21 +1,52 @@
 # WorldCreator
 
-Procedural terrain generation in the browser. TypeScript + Three.js + Vite, deployed to GitHub Pages.
+A real-time strategy game in which you *are* the wizard. TypeScript + Three.js + Vite, deployed to GitHub Pages.
 
 **Live: https://erictams.github.io/WorldCreator/**
 
-A seeded noise pipeline builds a finite island, hydraulic erosion carves drainage
-networks into it, and everything is exposed as live controls. This is the
-foundation for a game in the Populous / Magic Carpet mould — a bounded,
-deformable landscape you can view from strategy altitude or from the deck.
+A seeded noise pipeline builds a 2 km island, hydraulic erosion carves drainage
+networks into it, and a match is played on top: fifteen towns, mines, lairs,
+bandit camps, resource nodes and five Points of Power, contested by you and two
+AI wizards under identical rules.
+
+You fly a carpet in third person and the wizard is the only thing you directly
+control. Cities, armies and caravans are autonomous once ordered. The loop:
+
+> **Armies destroy defenses. Caravans claim nodes. The wizard claims everything else.**
+
+An army marches to a neutral town and kills its garrison; you fly there and
+channel Conversion to take it. Claimed cities produce gold into a one-item-at-a-time
+queue that buys tier-ups, buildings, more armies, caravans and siege engines. Each
+Point of Power you hold charges you 1% every 12 seconds, and 100% wins instantly.
+Tone references are Magic Carpet, Heroes of Might & Magic and Populous.
+
+The design is written down before it is built, in three milestone documents that
+supersede each other in order: [`docs/wizard-rts-full-design-doc.md`](docs/wizard-rts-full-design-doc.md)
+(the vision), then [`first-playable.md`](docs/first-playable.md),
+[`second-playable.md`](docs/second-playable.md) and
+[`third-playable.md`](docs/third-playable.md). The newest wins where they disagree.
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
-| **W A S D** | Move the avatar **north / west / south / east** |
-| **Space / Shift** | Ascend / descend (fly mode only) |
-| Mouse drag | Orbit · scroll to zoom |
+| **W A S D** | Fly the wizard **north / west / south / east** |
+| **Space / Shift** | Ascend / descend |
+| **1** then click | **Fireball** — 15 mana, 30 damage in a 6 m blast |
+| **E** | **Conversion** — a 10 s channel that claims the site you are standing on. Any hit interrupts it |
+| Click an army row | Select it, then click the map to march it there |
+| **Home** button | Recall that army to its city |
+
+**The camera is fixed to the wizard during play.** It follows the avatar and
+there is nothing to aim: what you are looking at is always where you are. The
+orbit and zoom controls are **debug only** — they belong to the terrain-tuning
+panel below, not to a match.
+
+Movement is in **fixed world directions**, not relative to anything — W is
+always north. That keeps the map's geography stable in your head: a place stays
+north-east of another place whichever way you approach it, which is how the
+strategy games this is aiming at behave. North is `-Z`, east is `+X`, and the
+corner compass shows where north is.
 
 Movement is in **fixed world directions, not relative to the camera** — W is
 always north however you've orbited the view. That keeps the map's geography
@@ -120,11 +151,32 @@ or set the resting pitch to match.
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # production bundle into dist/
-npm run typecheck  # tsc --noEmit
+npm run typecheck  # tsc --noEmit — the only gate CI runs
 npm run pack-sprites  # rebuild the sprite atlas — needs TempArt/, see below
 ```
 
 Pushing to `main` builds and deploys to GitHub Pages automatically.
+
+### Measuring the game without playing it
+
+The simulation is headless-capable and deterministic — it reads no clock and no
+global RNG, so a seed names a match exactly and two runs produce identical
+numbers. Two offline tools use that:
+
+```bash
+npm run match -- --seeds karomi,atlas,verdant   # AI-vs-AI matches on the real island
+npm run match -- --seeds karomi --json out.jsonl # one row per match, for diffing a retune
+npm run check-nodes                              # do the connection-resource rules fire at all?
+npm run audit-biomes -- karomi                   # territory sizes and an ASCII map
+```
+
+`npm run match` plays whole unattended matches and reports how long each took,
+when anybody reached tier 3, and whether a siege engine was ever fielded. It
+exists because the previous milestone's balance claims came from a throwaway
+harness on a board the game does not generate — and when a real one was finally
+run against the real island, it found five compounding bugs in the first
+afternoon, starting with two of three wizards never building an army at all.
+The story is in [`docs/third-playable.md`](docs/third-playable.md) §1.
 
 ## Art
 
@@ -165,19 +217,33 @@ generated from noise, a hand-drawn castle cannot.
 
 ```
 src/
-  world/     the generator — pure TypeScript, imports nothing from Three.js
-             (heightmap, territories, where the cities go)
-  render/    turns a height array into meshes
-  game/      avatar and input
-  ui/        the lil-gui control panel and compass
-  assets/    the sprite atlas and its generated frame map
-tools/       the atlas packer — build-time only, never imported by the app
+  world/     the generator and the board plan — pure TypeScript, imports
+             nothing from Three.js (heightmap, erosion, territories, where the
+             cities go, and gameMap.ts: which sites exist and who starts where)
+  render/    turns a height array into meshes; draws unit cards, banners,
+             siege engines and spell effects
+  game/      the match — sim.ts (the whole simulation), rules.ts (every tuning
+             number in one table), ai.ts (an AI wizard's brain), factions.ts
+             (rosters and garrisons), avatar.ts, input.ts, fogOfWar.ts
+  ui/        the game HUD, the lil-gui terrain panel, compass and touch D-pad
+  assets/    the sprite atlases and their generated frame maps
+tools/       build-time and offline only, never imported by the app: the atlas
+             packers, the biome audit, the match harness, the node checks
 ```
 
-The split matters. `world/` takes `(seed, params)` and returns a
-`Float32Array` of heights; it has no idea a renderer exists. That's what lets it
-run inside a Web Worker, stay testable, and makes the 3D library a swappable
-detail rather than a foundation.
+Three splits matter, and they are all the same split.
+
+`world/` takes `(seed, params)` and returns plain data; it has no idea a
+renderer exists. That's what lets it run inside a Web Worker and makes the 3D
+library a swappable detail rather than a foundation.
+
+`game/sim.ts` owns the match and touches no render state — the renderer asks it
+what to draw, never the other way round. It reaches Three.js only through
+`import type`, which is erased at compile time, so **the entire simulation runs
+under node with no browser at all**. That is what makes `npm run match` possible.
+
+`game/rules.ts` holds every number the match is played on, so tuning is editing
+one file rather than hunting through sixteen hundred lines of simulation.
 
 ## The generation pipeline
 
@@ -387,10 +453,24 @@ __world.erode()
 
 ## Not built yet
 
-Terrain sculpting brushes, prop and model decoration via instanced meshes,
-biomes beyond the colour ramp, rivers and lakes as real water bodies, LOD, and
-anything resembling gameplay. The avatar is a stand-in, not a character
-controller — no collision volume, no slope limit, no acceleration. It samples
-the heightmap and sits on it, which is enough to answer "does this landscape
-feel good to move through". The tiled meshing and the Three-free `world/`
-module are the two structural choices that keep those cheap to add.
+The milestone docs carry the real list, each deferral with the reason it was
+safe to defer — see [`third-playable.md`](docs/third-playable.md) §7, which is
+the current one. The headlines:
+
+- **The spellbook is deliberately two spells.** Fireball and Conversion. The
+  other eight in the design doc are deferred, along with artifacts, heroes and
+  the wizard's retinue.
+- **Flight is a carpet, not skiing.** No boost, no altitude band, no momentum —
+  the avatar samples the heightmap and rides above it, which was enough to
+  answer "does this landscape feel good to move through" and is now enough to
+  play a match. Skiing is a whole movement model and it is still deferred.
+- **No roads, no tier-3 capstone buildings, no second army per city.** Each is
+  cut for a stated reason rather than for time.
+- **No multiplayer, no save/load, no audio.**
+- **On the terrain side:** sculpting brushes, rivers and lakes as real water
+  bodies, and LOD.
+
+There is no wizard sprite and no siege art in the packs, so the wizard is a 3D
+carpet and the trebuchet is generated geometry — the same trick
+`render/banners.ts` uses. Those are live seams: when real art lands they are
+swaps, not rewrites.

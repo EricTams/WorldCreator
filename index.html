@@ -602,6 +602,59 @@
         margin-bottom: 6px;
         font-weight: 600;
       }
+      /* Name plates, projected onto the map from world space.
+         Pointer-events off throughout: they name the ground, they are not
+         controls, and a label must never eat a click meant for the terrain. */
+      .plates {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 5;
+      }
+      .plate {
+        position: absolute;
+        top: 0;
+        left: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        white-space: nowrap;
+        font-size: 12px;
+        line-height: 1.2;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.7);
+      }
+      .plate-name {
+        color: rgba(255, 255, 255, 0.92);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      /* Slightly tighter than the name, so a five-star plate does not turn into
+         a banner wider than the building it belongs to. */
+      .plate-stars {
+        font-size: 11px;
+        letter-spacing: -0.04em;
+      }
+      /* The difficulty rating, riding along with the name for the same reason
+         the tier does. Gold for what is still standing, hollow for what is not,
+         so the count says what the place *is* and the fill says how much of it
+         is left — a cleared three-star lair still reads as a three-star lair. */
+      .hud-stars {
+        margin-left: 6px;
+        color: #e8c15a;
+        letter-spacing: 0.04em;
+      }
+      /* What to do here, in a sentence. This is where a resource node says it
+         is waiting on a caravan and a lair says nobody can hold it. */
+      .hud-site-note {
+        max-width: 34ch;
+        margin: 0 auto;
+        font-size: 0.9em;
+        line-height: 1.35;
+        opacity: 0.85;
+      }
+      .hud-site-note + .hud-build-row {
+        margin-top: 7px;
+      }
       /* The tier, riding along with the name: a city's rank is part of what it
          is called, not a separate stat worth its own row. */
       .hud-city-tier {

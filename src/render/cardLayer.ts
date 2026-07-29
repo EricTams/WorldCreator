@@ -23,8 +23,15 @@ import type { SitePad } from '../world/sites'
  * per card per frame for no benefit.
  */
 
-/** World units a 16-pixel-tall sprite occupies. See `CardLayerOptions.pixelScale`. */
-export const DEFAULT_PIXEL_SCALE = 2.5
+/**
+ * World units a 16-pixel-tall sprite occupies. See `CardLayerOptions.pixelScale`.
+ *
+ * Re-exported rather than defined here: the world planner sizes a town's
+ * clearing from the same number, and it cannot import a module that pulls in
+ * three.js. `assets/spriteScale.ts` is the shared home.
+ */
+export { DEFAULT_PIXEL_SCALE } from '../assets/spriteScale'
+import { DEFAULT_PIXEL_SCALE } from '../assets/spriteScale'
 
 export interface CardSpec {
   sprite: SpriteKey

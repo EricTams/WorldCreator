@@ -33,34 +33,27 @@
  * Land only, everywhere: seabed belongs to no territory and is excluded from
  * every area, share and adjacency below, the same way `cities.ts` excludes it.
  */
-import { defaultParams } from '../src/world/params'
-import { generateHeightmap } from '../src/world/generate'
-import { placeCities } from '../src/world/cities'
 import { BIOMES, buildBiomeField, sampleBiomeAt } from '../src/world/biome'
 import { terrainHeightAt, worldHalfExtent } from '../src/world/terrainQuery'
+import { buildBoard } from './board'
 
 const seeds = process.argv.slice(2)
 if (seeds.length === 0) seeds.push('karomi')
 
 for (const seedName of seeds) {
-  const params = defaultParams()
-  params.seed = seedName
-  const hm = generateHeightmap(params)
+  // Built by `tools/board.ts`, which is the sequence the game uses.
+  //
+  // This file used to assemble its own: `generateHeightmap` with no erosion, no
+  // amplification, and a frame missing the coastal shelf — so every height
+  // query came back under sea level, `placeCities` returned an empty list, and
+  // the audit crashed on the first territory it tried to name. It also
+  // hardcoded a 60-unit capital clearing when the real figure is 17.6. It had
+  // been reporting on a board the game does not build, and then on no board at
+  // all.
+  const { params, frame, cities } = buildBoard(seedName, { flatten: false })
   const worldSize = params.mapSize * params.render.cellSize
-  const frame = {
-    heightmap: hm,
-    cellSize: worldSize / (hm.size - 1),
-    heightScale: params.render.heightScale,
-    seaLevel: params.shape.seaLevel,
-  }
   const half = worldHalfExtent(frame)
   const seaY = frame.seaLevel * frame.heightScale
-
-  // What `planWorld` passes: the town sprite's width through the village
-  // layout's outer ring and margin. Hardcoded rather than imported because the
-  // sprite atlas is a browser concern and this runs in node.
-  const clearing = 60
-  const cities = placeCities(params.seed, frame, { count: params.biome.cities, clearing })
   const field = buildBiomeField(params.seed, worldSize, params.biome, cities)
 
   // Rasterise

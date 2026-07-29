@@ -6,6 +6,8 @@
  */
 
 import { spritesWithRole } from '../assets/sprites'
+import type { SpriteKey } from '../assets/sprites'
+import { spriteWidthOf } from '../assets/spriteScale'
 import type { Heightmap } from './heightmap'
 import { sampleHeightAndGradient } from './heightmap'
 import { BIOMES, sampleBiomeAt } from './biome'
@@ -244,6 +246,58 @@ function ringPoints(
     out.push({ x: cx + Math.cos(angle) * r, z: cz + Math.sin(angle) * r })
   }
   return out
+}
+
+/**
+ * The village ring, as multiples of the town card's own width.
+ *
+ * These live here rather than in `main.ts` because two things read them and
+ * they have to agree: `settlementLayout` places the houses on the ring, and
+ * `capitalClearing` levels the ground the ring stands on. When the two were
+ * derived separately, the terrace was cut to one radius and the houses seated
+ * on another, which shows as the tallest card in the game standing half off
+ * its own terrace.
+ */
+export const VILLAGE_INNER = 0.92
+export const VILLAGE_OUTER = 1.16
+/** Slack beyond the outer ring, so the far edge of a house is still on flat ground. */
+export const VILLAGE_MARGIN = 1.06
+
+/**
+ * How much flat ground a capital needs: its whole village ring, plus the half
+ * card-width the outermost building overhangs by, plus the margin.
+ *
+ * A function of the atlas rather than a constant, so that rescaling the art
+ * cannot silently leave every town on a terrace that no longer fits it. Pure
+ * arithmetic over generated data — `world/` still imports no three.js, and a
+ * headless tool gets the same number the renderer does.
+ */
+export function capitalClearing(pixelScale?: number): number {
+  const townWidth = spriteWidthOf('city.castle', pixelScale)
+  return (townWidth * VILLAGE_OUTER + townWidth * 0.5) * VILLAGE_MARGIN
+}
+
+/**
+ * How much flat ground a lone building needs — its own footprint and no more.
+ *
+ * Every non-capital site used to be terraced to its `radius`, which is not a
+ * measure of the building at all: it is the defender leash and the ownership
+ * disc, and it runs from 24 at a camp to 48 at a city. A lair's card is
+ * **five world units wide**, so it was levelling a 40-unit disc and grading a
+ * skirt to 80 for something the size of a cart — a 160-unit scar around a
+ * building you can barely see, which is most of why the island read as bare.
+ * The clearings were also what forced the placement gaps apart, so this is the
+ * change that lets the map carry real content density.
+ *
+ * A capital is the exception and keeps `capitalClearing`, because it genuinely
+ * has a village standing around it.
+ */
+export function siteClearing(sprite: SpriteKey, pixelScale?: number): number {
+  const width = spriteWidthOf(sprite, pixelScale)
+  // Half the card, plus the same margin the village ring uses. Half a width is
+  // the real footprint: a card is centred on its site, so it overhangs by half
+  // in every direction and nothing beyond that is standing on the terrace.
+  return width * 0.5 * VILLAGE_MARGIN
 }
 
 /** A capital and the village drawn around it. */

@@ -17,12 +17,13 @@ import { RULES } from './game/rules'
 import type { BuildItem } from './game/rules'
 import { Hud, SPELLS } from './ui/hud'
 import { FACTIONS } from './game/factions'
-import { planGameMap } from './world/gameMap'
+import { planGameMap, planPoints } from './world/gameMap'
 import type { MapPlan } from './world/gameMap'
 import { raycastTerrain } from './game/raycast'
 import { TerrainMesh } from './render/terrainMesh'
 import type { TerrainFrame } from './world/terrainQuery'
 import { Compass } from './ui/compass'
+import { NamePlates } from './ui/namePlates'
 import { Credits } from './ui/credits'
 import { DPad } from './ui/dpad'
 import { setTouchMode, startTouchDetection } from './ui/touchMode'
@@ -37,10 +38,14 @@ import { FogGrid } from './world/fog'
 import { FogTexture } from './render/fogTexture'
 import { FogOfWar } from './game/fogOfWar'
 import {
+  VILLAGE_INNER,
+  VILLAGE_OUTER,
+  capitalClearing,
   flattenSitePads,
   ringDecorations,
   scatterDecorations,
   settlementLayout,
+  siteClearing,
 } from './world/sites'
 import type { DecoSpot, SitePad } from './world/sites'
 import { terrainHeightAt } from './world/terrainQuery'
@@ -74,6 +79,8 @@ scene.scene.add(avatar.object)
 // frame that hovers, yaws and scales with the figure.
 scene.scene.add(avatar.shadow.object)
 const compass = new Compass(document.body)
+// What each place is called and how hard it is, projected onto the map.
+const namePlates = new NamePlates(document.body)
 // Touch movement. It feeds the same movement codes into `keys`, so nothing
 // downstream — the avatar, the fog, the follow camera — knows it exists.
 const dpad = new DPad(document.body, keys)
@@ -179,6 +186,9 @@ const hud = new Hud(document.body, sim, {
       return
     }
     if (!sim.queueBuild(site, item)) hud.message('Not enough gold.')
+  },
+  onHire: (site: SiteState) => {
+    if (!sim.hirePatrol(site)) hud.message(sim.patrolSpec(site).blocked ?? 'Cannot hire here.')
   },
   onConvert: (site: SiteState) => {
     if (!sim.beginConvert(sim.player, site)) hud.message('Nothing to consecrate here.')
@@ -418,30 +428,6 @@ function revertErosion(): void {
 }
 
 /**
- * How wide a settlement is, as a multiple of its town card's width.
- *
- * These are the ring the buildings stand on, town included — not a band around
- * something in the middle, because there is nothing in the middle. The plaza the
- * ring encloses is about two town-widths across, which is room for an army to
- * form up in without the village reading as a racetrack with a keep on it.
- *
- * The band between them is narrow on purpose. A wide band is a blob of houses; a
- * narrow one is a street with a frontage, and the frontage is what makes the
- * empty ground inside look enclosed rather than merely unoccupied.
- */
-const VILLAGE_INNER = 0.92
-const VILLAGE_OUTER = 1.16
-/**
- * Margin between the village's own footprint and the edge of the levelled
- * terrace.
- *
- * The footprint is the ring plus half a town, since the town now stands *on*
- * the ring and sweeps its own width as it yaw-billboards. Getting this wrong
- * shows as the tallest card in the game standing half off its terrace.
- */
-const VILLAGE_MARGIN = 1.06
-
-/**
  * The placed world: the capitals, the territories they define, and every card
  * standing on it.
  *
@@ -492,9 +478,21 @@ function planWorld(): WorldPlan | null {
   if (!frame) return null
 
   const townWidth = cards.spriteWidth('city.castle')
-  const clearing = (townWidth * VILLAGE_OUTER + townWidth * 0.5) * VILLAGE_MARGIN
+  const clearing = capitalClearing()
+
+  // The five Points of Power are sited before anything else on the board. They
+  // make an X — four arms and a centre — and that figure is the map's fairness:
+  // when a point was instead hung off each capital, a wizard who drew a roomy
+  // start drew an easy victory condition with it. Cities are then told where
+  // the points went, because a capital cannot be moved once it has a village
+  // and a territory, so first refusal has to be given rather than taken.
+  const points = params.biome.enabled ? planPoints(params.seed, frame) : []
   const cities = params.biome.enabled
-    ? placeCities(params.seed, frame, { count: params.biome.cities, clearing })
+    ? placeCities(params.seed, frame, {
+        count: params.biome.cities,
+        clearing,
+        reserved: points.map((p) => ({ x: p.x, z: p.z, radius: p.radius + clearing })),
+      })
     : []
 
   const field = params.biome.enabled
@@ -506,7 +504,7 @@ function planWorld(): WorldPlan | null {
       )
     : null
 
-  const game = planGameMap(params.seed, frame, cities, FACTIONS.length)
+  const game = planGameMap(params.seed, frame, cities, FACTIONS.length, points)
 
   // A wizard's capital is drawn with its faction's own castle rather than with
   // its territory's, so the three seats of power are recognisable on sight.
@@ -563,9 +561,15 @@ function planWorld(): WorldPlan | null {
   // Points of Power. They are the same kind of thing — ground that has been
   // levelled for something built on it — so they travel together and every
   // consumer treats them alike.
+  // A capital gets its whole village ring levelled; everything else gets only
+  // the ground its own card stands on. `s.radius` is the defender leash, not a
+  // measure of the building, and terracing to it cut an 80-unit bald disc
+  // around a five-unit-wide lair.
   const plazas: SitePad[] = cities.map((c) => ({ x: c.x, z: c.z, radius: clearing }))
   for (const s of game.sites) {
-    if (s.sprite !== null) plazas.push({ x: s.x, z: s.z, radius: s.radius })
+    if (s.sprite !== null) {
+      plazas.push({ x: s.x, z: s.z, radius: siteClearing(s.sprite as SpriteKey) })
+    }
   }
 
   const owned = cities.filter((c) => c.player).map((c) => ({ x: c.x, z: c.z }))
@@ -1154,8 +1158,16 @@ canvas.addEventListener('pointerup', (e) => {
     const target = nearestExploredSite(hit.x, hit.z, (s) => s.kind === 'node')
     if (!target) {
       hud.message('No known resource node there.')
-    } else if (!sim.canLinkTo(target.id)) {
-      hud.message(`${target.name} is not free to link — clear it first.`)
+    } else if (target.owner !== sim.player.faction) {
+      // The wizard has to hold it before a city can be given it. Two different
+      // failures, because they want two different things done about them.
+      hud.message(
+        sim.isCleared(target)
+          ? `${target.name} is cleared — consecrate it before linking it.`
+          : `${target.name} is still defended — send an army.`,
+      )
+    } else if (!sim.canLinkTo(target.id, sim.player.faction)) {
+      hud.message(`${target.name} already supplies one of your cities.`)
     } else if (!sim.queueBuild(city, 'caravan', target.id)) {
       hud.message('Not enough gold.')
     } else {
@@ -1257,6 +1269,16 @@ scene.renderer.setAnimationLoop(() => {
     sim.update(dt, frame, avatar.position.x, avatar.position.z, avatar.position.y)
     const fogOn = params.fog.enabled && !params.fog.revealAll
     sim.draw(unitLayer, boardLayer, banners, siegeEngines, frame, fogOn ? (x, z) => fogGrid.exploredAt(x, z) : () => 1)
+    // Plates last, so they are projected from the camera this frame actually
+    // used. The camera is read here and nothing else — no framing, no zoom.
+    namePlates.update(
+      sim,
+      rig.camera,
+      scene.renderer.domElement.clientWidth,
+      scene.renderer.domElement.clientHeight,
+      (x, z) => terrainHeightAt(frame, x, z),
+      fogOn ? (x, z) => fogGrid.exploredAt(x, z) : () => 1,
+    )
     effects.update(sim.projectiles, sim.blasts)
     hud.update(dt)
 
@@ -1281,9 +1303,15 @@ scene.renderer.setAnimationLoop(() => {
         avatar.position.y - seaY,
         params.render.heightScale,
         // A settlement puts its surroundings on the map for good — `reveal`'s
-        // permanent channel, which existed for exactly this and had nothing to
-        // feed it while the sites were a hardcoded list.
-        plan?.owned ?? [],
+        // permanent channel, which existed for exactly this.
+        //
+        // Read from the simulation each tick rather than from a snapshot taken
+        // at world build. `plan.owned` was the player's *starting* cities and
+        // nothing else: a town captured in minute twenty lit nothing, one lost
+        // lit the map for the rest of the match, and an Observatory had no way
+        // to say it reveals four hundred units where a town reveals a hundred
+        // and fifty.
+        sim.revealedBy(sim.player.faction),
       )
     ) {
       applyFog()

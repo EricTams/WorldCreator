@@ -20,6 +20,8 @@ The identity sentence gains a clause:
 
 > **Armies destroy defenses. Caravans claim nodes. The wizard claims everything else.**
 
+*Superseded by the fourth playable.* Consecration became the single claiming verb for everything that can be held, nodes included, and the caravan's job was narrowed to the one it was always really doing: **naming which city a node supplies**. See `fourth-playable.md` §1.
+
 Target match length: **30–40 minutes**, up from 20–30. The extra time is build-up, not grind — the tier ladder and the siege arms race are what fill it.
 
 ### A correction carried in from the first playable
@@ -116,6 +118,7 @@ Three buffs that answer three different questions — *hit harder*, *get there s
 - **Different buffs stack** on one city. Duplicates of the same kind do nothing, which the doc says out loud and the code does not bother to forbid.
 - Nodes are **guarded at ~0.53 armies** — treant, satyr and druid from the unused Great Elf roster, so "wild" keeps reading as wild. Cleared nodes regenerate on the standard 5-minute rule if nobody links them.
 - **A node cannot be consecrated.** The wizard has no business here; the caravan's *arrival* is what claims it. This is the one place the milestone extends the identity sentence, and it earns it — it gives the caravan a job that no other system can do.
+  - *Reversed by the fourth playable.* A node is consecrated like every other held site, and the caravan assigns rather than claims. The clause cost two standing special cases to prop up — "an AI must never treat a node as claimable", and an escape hatch for armies camped forever on ground nobody could claim — and both are now deleted rather than maintained.
 
 ---
 
@@ -185,7 +188,7 @@ That third rule is what makes the whole milestone legible from the player's chai
 
 ---
 
-## 10. Build order — **built, through step 6**
+## 10. Build order — **all seven steps built** (step 7 in the third playable)
 
 Each step is playable on its own and typechecks on its own (`npm run typecheck`, the same check CI runs).
 
@@ -196,7 +199,7 @@ Each step is playable on its own and typechecks on its own (`npm run typecheck`,
 4. **Resource nodes on the map** — placement, garrison, and the rule that the wizard cannot claim them.
 5. **Caravans, links, and the three buffs** — the largest step. *Test: link a Mithril mine and watch the same army win a fight it previously lost; then kill the wagon and watch the buff drop.*
 6. **Siege Works and the trebuchet** — including the AI that brings one. *Test: an AI siege train cracks a player fort; a sally that kills the trebuchet defeats the assault.*
-7. **Tuning pass and doc sync** — unattended matches, retune `rules.ts`, mirror the final numbers back into §11 here.
+7. **Tuning pass and doc sync** — unattended matches, retune `rules.ts`, mirror the final numbers back into §11 here. *Done as part of [`third-playable.md`](third-playable.md), which built the harness it needed; see the note below and §11.*
 
 ### What the build actually cost
 
@@ -210,11 +213,15 @@ Steps 2–6 landed with one balance surprise and three real bugs, all three of t
 
 With those three fixed, the keystone test reads exactly as §3 claims: **one army fails; two armies crack it and lose four of ten; one army with a trebuchet cracks it and loses nobody.**
 
-### The open question for step 7
+### The open question for step 7 — **answered in the third playable, and the guess was wrong**
 
 A full unattended three-wizard match runs end to end and produces a winner. But on a synthetic board it finished in **19 minutes with no wizard ever reaching tier 3** — so no Siege Works was ever built, no trebuchet was ever fielded, and the centrepiece of this milestone never appeared in a match nobody was steering.
 
 The mechanism is fine; the harness proves an engine cracks a fort as designed. What is wrong is the **pacing**: the AI's build ladder pays for an army, a shrine, a market and a fort at *every* city it takes before it tiers any of them up, so 400 gold for a City never comes free before the charge race is decided. Whichever way that is fixed — a cheaper tier 3, Siege Works pulled down to Town, or an AI that grows its capital instead of fortifying every village — it is a tuning decision that should be made against the **real generated island**, not against the flat test board that produced this number. That is step 7, and it wants a playtest rather than a harness.
+
+> **What actually happened.** [`third-playable.md`](third-playable.md) built the harness this paragraph says it does not need — `npm run match`, on the real island — and the pacing story above turned out to be a symptom rather than the cause. On the generated board **two of the three wizards never built an army at all**, because the AI's build ladder was allowed to fall through to something cheaper when it could not afford the top of its list, and a caravan costs half what an army does. Four more compounding faults sat behind that one, none of them a price. The cheaper tier 3 *was* eventually adopted — 400 g → 300 g — but as the last small step of a fix, not the fix. See `third-playable.md` §1.
+>
+> The lesson worth carrying forward is the one this section is an example of: **a claim about an unattended match is not evidence unless something ran the match.** The numbers above came from a harness that was thrown away, on a board the game does not generate.
 
 ### Bugs not to introduce (the successors to `first-playable.md` §9's four)
 
@@ -231,17 +238,19 @@ The mechanism is fine; the harness proves an engine cracks a fort as designed. W
 
 ## 11. Numbers appendix (additions to `first-playable.md` §10)
 
+*Two of these moved in the third playable and are marked. `third-playable.md` §9 is the current appendix.*
+
 | | |
 |---|---|
 | City tiers | Village → Town → City · capitals start Town · captured towns arrive Village |
-| Tier-up | →Town 200 g / 90 s · →City 400 g / 120 s |
+| Tier-up | →Town 200 g / 90 s · →City ~~400~~ **300** g / 120 s *(third playable)* |
 | City income | 10 / 15 / 20 g/min by tier · Market +10 g/min |
 | Market · Siege Works | 150 g/75 s (Town) · 250 g/90 s (City) |
 | Fort towers | 2 × 300 HP · 12 DPS · 30 m range (fort ≈ 1.6 armies) |
 | Repair | free, auto-queued when the queue is empty, full restore in 45 s, yields to any order |
 | Trebuchet | 200 g / 90 s · 80 HP · 40 DPS structures only · 55 m · army ×0.6 · never reconstituted |
 | Caravan | 50 g · 30 s build then 3 m/s travel, queue held until arrival · wagon 60 HP, unarmed |
-| Resource nodes | 6 (2 each of Mithril / Horse Plains / Granary) · garrison ≈ 0.53 armies |
+| Resource nodes | ~~6~~ **12** (2 each of six kinds) · garrison ≈ 0.53 armies *(third playable)* |
 | Node buffs | +30% damage · +30% march · reconstitution ×0.6 |
 | Standard army power | 8,840 (260 HP × 34 DPS) — the reference for every garrison multiple |
 | Target match length | 30–40 min |

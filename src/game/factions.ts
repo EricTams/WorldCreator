@@ -114,6 +114,28 @@ function unit(sprite: UnitKey, name: string, role: Role, over: Partial<UnitStats
   return { ...ARCHETYPE[role], ...over, sprite, name }
 }
 
+/**
+ * What a Monster Graveyard sends to the city that links it.
+ *
+ * A seventh body in an army that otherwise has six, and the first unit in the
+ * game that is not bought — it arrives because of something you connected on
+ * the map, which is the whole argument for connection resources being more
+ * interesting than a stockpile.
+ *
+ * From the unused `wizards` roster, so that a wild thing never reads as any
+ * faction's own troops — the same rule the Great Elf garrisons follow.
+ *
+ * Deliberately *not* a new role. It fights as heavy infantry, which means the
+ * rout rule already counts it as a fighter and the damage model already knows
+ * what to do with it. This is one strong unit on one condition, not the special
+ * unit *system*, which is still deferred with artifacts and heroes.
+ */
+export const GRAVEYARD_MONSTER: UnitDef = unit('unit.wizards.golem', 'Golem', 'foot', {
+  hp: 180,
+  dps: 16,
+  scale: 1.3,
+})
+
 /** A wizard's army, in the order units are spawned. */
 export interface ArmyRoster {
   /** Three foot, one ranged, one fast, one bearer — the full doc's §4.1 default. */
@@ -219,10 +241,10 @@ export const NEUTRAL_TINT = 0x9aa4ae
  * as multiples of that, which is the only way these numbers mean anything: a
  * lair is not "325 hit points", it is "four fifths of an army".
  *
- * That figure was wrong in `docs/first-playable.md` (it says 5,700) and the
+ * That figure was wrong in `docs/first-playable.md` (it said 5,700) and the
  * multiples quoted in the tables below were scaled to it. The garrisons play
  * well and none of them changed; the labels did. `docs/second-playable.md` §1
- * carries the corrected table.
+ * carries the corrected table, and the old doc now says so at the point of use.
  */
 export function groupPower(units: readonly UnitDef[]): number {
   let hp = 0
@@ -235,20 +257,72 @@ export function groupPower(units: readonly UnitDef[]): number {
   return hp * dps
 }
 
+/** A standard six-unit army, by `groupPower`. The unit every garrison is quoted in. */
+export const ARMY_POWER = 8840
+
+/**
+ * Difficulty bands, in multiples of a standard army.
+ *
+ * Absolute, never relative to what the player currently fields. A lair reads
+ * three stars in minute two and in minute fifty, which is the whole point: the
+ * rating is something you learn once rather than a moving judgement about your
+ * present army. The alternative — scoring against your strongest troops — makes
+ * the same building read differently every ten minutes and teaches nothing.
+ *
+ * Every band is occupied by something on the board, so all five stars mean
+ * something rather than the top two being decorative.
+ */
+const STAR_BANDS = [0.25, 0.6, 1.0, 1.8]
+
+/**
+ * How hard this garrison is, from one star to five.
+ *
+ * Lives here rather than in the UI because it is a reading of the tables
+ * directly above it, and a copy kept anywhere else would quietly stop matching
+ * them the first time a garrison is retuned. A wrong star is worse than none:
+ * it is the game telling the player something false about what they are about
+ * to fly into.
+ */
+export function starsFor(units: readonly UnitDef[]): number {
+  const armies = groupPower(units) / ARMY_POWER
+  let stars = 1
+  for (const band of STAR_BANDS) {
+    if (armies > band) stars++
+  }
+  return Math.min(5, stars)
+}
+
 export const GARRISONS: Record<string, UnitDef[]> = {
   /**
    * A neutral town. ~0.35 armies: one healthy army takes it and walks away with
    * casualties, which is what "the primary expansion mechanism" has to mean.
    *
-   * This was four defenders including a second archer, and measured out at 0.9
-   * armies against the old 5,700 yardstick — a near-run thing that cost five of six units every time. Expansion
-   * that has to be paid for with a whole army does not happen twice, and the
-   * whole opening of the match is built on it happening repeatedly.
+   * This was four defenders including a second archer — a near-run thing that
+   * cost five of six units every time. Expansion that has to be paid for with a
+   * whole army does not happen twice, and the whole opening of the match is
+   * built on it happening repeatedly.
    */
   town: [
     unit('unit.greatElf.dwarf', 'Dwarf', 'foot'),
     unit('unit.greatElf.hunter', 'Hunter', 'ranged'),
     unit('unit.greatElf.deer', 'Stag', 'fast'),
+  ],
+  /**
+   * A bandit camp, ~0.14 armies and the smallest fight on the board.
+   *
+   * Melee only, and that is the whole design: three imps cannot answer a wizard
+   * who stands at the edge of the 24-unit pad and throws, because the wizard's
+   * reach is 15 and theirs is contact. So a camp is the one site a wizard clears
+   * alone without spending health — the mana is the price — which is what gives
+   * the opening minutes something to do that is not escorting an army.
+   *
+   * Weak individually on purpose too: 40 HP is under two fireballs, so the fight
+   * is short enough to be worth flying to.
+   */
+  camp: [
+    unit('unit.darkBastion.imp', 'Imp', 'foot', { hp: 40, dps: 4, scale: 0.85 }),
+    unit('unit.darkBastion.imp', 'Imp', 'foot', { hp: 40, dps: 4, scale: 0.85 }),
+    unit('unit.darkBastion.imp', 'Imp', 'foot', { hp: 40, dps: 4, scale: 0.85 }),
   ],
   /** A gold vein, ~0.15 armies. Soloable by a careful wizard, trivial to an army. */
   mine: [
@@ -286,6 +360,71 @@ export const GARRISONS: Record<string, UnitDef[]> = {
     unit('unit.elementals.storm_elemental', 'Storm Elemental', 'ranged', { hp: 50 }),
     unit('unit.elementals.ice_elemental', 'Ice Elemental', 'fast'),
     unit('unit.elementals.diamond_elemental', 'Diamond Elemental', 'foot', { hp: 120, dps: 10 }),
+  ],
+  /**
+   * A monument, ~0.72 armies — between a node and a lair.
+   *
+   * It has to need an army. A monument's buff lands on the wizard's whole realm
+   * for as long as it is held, which is a bigger prize than any single city's
+   * node, so it cannot be something a wizard picks up alone on the way past.
+   * Ranged defenders are what enforce that: a stand-off does not work here the
+   * way it does at a camp.
+   *
+   * The four elementals nobody else uses. Elementals already hold the mines and
+   * the Points of Power, so bound spirits guarding a temple reads as the same
+   * kind of wild magic rather than as a new faction nobody has met.
+   */
+  monument: [
+    unit('unit.elementals.water_elemental', 'Water Elemental', 'foot', { hp: 75, dps: 8 }),
+    unit('unit.elementals.mind_elemental', 'Mind Elemental', 'ranged', { hp: 40, dps: 8 }),
+    unit('unit.elementals.magic_elemental', 'Magic Elemental', 'ranged', { hp: 40, dps: 9 }),
+    unit('unit.elementals.wind_elemental', 'Wind Elemental', 'fast', { hp: 45, dps: 7 }),
+  ],
+  /**
+   * The six outpost patrols — each one a building's garrison *and* the thing
+   * that building sells.
+   *
+   * What guards it is what you get, so the player learns each outpost's price
+   * by fighting it once. All six come from the `wizards` roster and the Great
+   * Elf leftovers, which no faction fields: a hired thing must not read as a
+   * raised thing, the same rule `GRAVEYARD_MONSTER` follows for the same
+   * reason. Ownership is legible from the tint disc and the banner, as it is
+   * for every other site on the board.
+   *
+   * They answer six different questions rather than sitting on one power
+   * curve — the cheapest is not simply the worst.
+   */
+  /** The default line. Two bodies and something that reaches. ~0.35 armies. */
+  'outpost.watchfort': [
+    unit('unit.wizards.gargoyle', 'Gargoyle', 'foot', { hp: 70, dps: 7 }),
+    unit('unit.wizards.gargoyle', 'Gargoyle', 'foot', { hp: 70, dps: 7 }),
+    unit('unit.wizards.naga', 'Naga', 'ranged', { hp: 45, dps: 10 }),
+  ],
+  /** One expensive heavy hitter. ~0.30 armies in a single body. */
+  'outpost.arena': [
+    unit('unit.wizards.titan', 'Titan', 'foot', { hp: 160, dps: 16, scale: 1.3 }),
+  ],
+  /** The cheapest thing on the board. Kills wagons; loses to armies. ~0.12. */
+  'outpost.wayhouse': [
+    unit('unit.wizards.gremlin', 'Gremlin', 'foot', { hp: 35, dps: 5, scale: 0.85 }),
+    unit('unit.wizards.gremlin', 'Gremlin', 'foot', { hp: 35, dps: 5, scale: 0.85 }),
+    unit('unit.wizards.gremlin', 'Gremlin', 'foot', { hp: 35, dps: 5, scale: 0.85 }),
+  ],
+  /** Fast raiders that run down stragglers and caravans. ~0.22 armies. */
+  'outpost.blackMarket': [
+    unit('unit.wizards.lion', 'Manticore', 'fast', { hp: 65, dps: 11 }),
+    unit('unit.wizards.lion', 'Manticore', 'fast', { hp: 65, dps: 11 }),
+  ],
+  /** Armoured, slow, hard to shift. ~0.29 armies of pure staying power. */
+  'outpost.warren': [
+    unit('unit.greatElf.dwarf', 'Dwarf', 'foot', { hp: 90, dps: 6, speed: 3 }),
+    unit('unit.greatElf.dwarf', 'Dwarf', 'foot', { hp: 90, dps: 6, speed: 3 }),
+    unit('unit.greatElf.dwarf', 'Dwarf', 'foot', { hp: 90, dps: 6, speed: 3 }),
+  ],
+  /** Reach, with something small and quick in front of it. ~0.26 armies. */
+  'outpost.wardens': [
+    unit('unit.wizards.djinn', 'Djinn', 'ranged', { hp: 60, dps: 12 }),
+    unit('unit.greatElf.pixie', 'Pixie', 'fast', { hp: 35, dps: 6 }),
   ],
   /**
    * The hardest garrison on the map, ~2.49 armies, guarding the central points.
