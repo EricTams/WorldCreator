@@ -18,7 +18,7 @@ import { MAX_TIER, RULES, TIER_NAMES } from './rules'
 import type { BuildItem } from './rules'
 import { flyAi } from './ai'
 import type { BoardLayer } from '../render/boardLayer'
-import type { Banners } from '../render/banners'
+import type { BannerGuard, Banners } from '../render/banners'
 import type { SiegeEngines } from '../render/siege'
 import type { SpriteKey, UnitKey } from '../render/spriteAtlas'
 
@@ -118,6 +118,15 @@ export interface SiteState extends MapSite {
   /** Counts up while cleared and unclaimed, until the garrison comes back. */
   regenT: number
   /**
+   * Who has living troops standing in this clearing: bit *f* per faction, plus
+   * `NEUTRAL_HOLDER` for a neutral garrison. Rebuilt on the slow tick.
+   *
+   * Holding the ground is what stops a site changing hands, so this is read by
+   * both the consecration rules and the crossed swords over its banner — one
+   * source, so the symbol can never promise something the rules will not honour.
+   */
+  holders: number
+  /**
    * Village, Town or City. Cities only, and it survives capture — taking a
    * developed city takes the development with it, which is what makes an
    * enemy capital the biggest prize on the board.
@@ -162,6 +171,14 @@ export interface Wizard {
   goalX: number
   goalZ: number
   thinkT: number
+  /**
+   * AI only: what it decided to do, in the words a spectator would use.
+   *
+   * Written at each `return` in the AI's think pass purely so attract mode can
+   * say it out loud. Nothing in the simulation reads it — an intent that fed
+   * back into behaviour would be a second, quieter brain.
+   */
+  intent: string
 }
 
 export interface Projectile {
@@ -279,6 +296,37 @@ const TOWER_OFFSETS: [number, number][] = [
   [0.55, -0.35],
 ]
 
+/**
+ * The bit in `SiteState.holders` that means "a neutral garrison is standing
+ * here". Factions take bits 0..2, so this is the first one above them.
+ */
+export const NEUTRAL_HOLDER = 1 << 3
+
+/** Every bit `holders` may carry, for masking out one faction's own. */
+const HOLDER_MASK = (1 << 4) - 1
+
+/** The four corners of the square a city flies its standards on. */
+const CITY_BANNERS: [number, number][] = [
+  [-1, -1],
+  [1, -1],
+  [-1, 1],
+  [1, 1],
+]
+
+/**
+ * The circle those corners stand on, as a fraction of the site radius.
+ *
+ * Well inside the houses, which is the whole point of flagging a city this way:
+ * the standards ring the plaza the village encloses rather than standing among
+ * the buildings. Note how little of a city's pad that is. The pad is levelled
+ * *ground* — 48 units out, against a plaza of about 17.6 and a house ring
+ * between them — so it is a poor stand-in for "the city's circle": inscribing
+ * the square in the pad put the flags in the fields beyond the village, far
+ * enough apart at the follow camera that they left the screen in opposite
+ * directions and stopped reading as one town's.
+ */
+const CITY_BANNER_RING = 0.2
+
 export class Sim {
   sites: SiteState[] = []
   wizards: Wizard[] = []
@@ -319,6 +367,16 @@ export class Sim {
     this.opts = opts
   }
 
+  /**
+   * Whether faction 0 is played by the AI rather than by the avatar.
+   *
+   * A property of the *match*, not of the instance, so it is set by `reset` and
+   * never written anywhere else: `isPlayer` is computed from it once per match,
+   * and flipping it mid-match would leave the two disagreeing about who is
+   * driving.
+   */
+  allAi = false
+
   get player(): Wizard {
     return this.wizards[0]
   }
@@ -341,13 +399,15 @@ export class Sim {
    * ends the match in progress, which is the honest behaviour — the map it was
    * being played on no longer exists.
    */
-  reset(plan: MapPlan): void {
+  reset(plan: MapPlan, allAi = this.opts.allAi ?? false): void {
+    this.allAi = allAi
     this.capitals = [...plan.capitals]
     const capitals = new Set(plan.capitals)
     this.sites = plan.sites.map((s) => ({
       ...s,
       defenders: [],
       regenT: 0,
+      holders: 0,
       // A wizard's capital opens at Town. Charging every wizard ninety seconds
       // of queue before the game can start would tax the one part of the first
       // playable that already works — the opening. Everything else, including
@@ -378,7 +438,7 @@ export class Sim {
       const capital = this.siteById(plan.capitals[f])
       return {
         faction: f,
-        isPlayer: f === 0 && !this.opts.allAi,
+        isPlayer: f === 0 && !this.allAi,
         x: capital?.x ?? 0,
         z: capital?.z ?? 0,
         y: 0,
@@ -394,6 +454,7 @@ export class Sim {
         goalX: capital?.x ?? 0,
         goalZ: capital?.z ?? 0,
         thinkT: f * 0.7,
+        intent: '',
       }
     })
 
@@ -516,7 +577,32 @@ export class Sim {
     // and hovers there for the rest of the match.
     if (site.kind === 'lair' || site.kind === 'camp') return false
     if (site.owner === w.faction) return false
+    // Somebody else's soldiers are standing on it. Beating the garrison is no
+    // longer enough on its own: a city defended by the army parked in it used
+    // to be walked into and consecrated around them, because the test only ever
+    // looked at the garrison a claimed site does not have. Whoever holds the
+    // ground holds the place — which is also exactly what its banner is flying
+    // crossed swords to say.
+    if (this.heldAgainst(w.faction, site)) return false
     return this.isCleared(site)
+  }
+
+  /** Does this faction have troops standing in this site's clearing? */
+  heldBy(faction: number, site: SiteState): boolean {
+    return (site.holders & (1 << faction)) !== 0
+  }
+
+  /**
+   * Is anybody *else* holding this site's ground — another wizard's troops, or
+   * a neutral garrison?
+   *
+   * The one question consecration turns on, and the one the crossed swords
+   * report. Troops of your own standing here do not count, which is what keeps
+   * the ordinary loop working: an army clears a mine, camps on it, and its
+   * wizard flies in and consecrates the ground its own soldiers are holding.
+   */
+  heldAgainst(faction: number, site: SiteState): boolean {
+    return (site.holders & ~(1 << faction) & HOLDER_MASK) !== 0
   }
 
   /** Can this wizard start a consecration here, right now? */
@@ -558,8 +644,16 @@ export class Sim {
     }))
   }
 
+  /**
+   * A faction's armies *in the field*.
+   *
+   * A wiped-out army keeps its record so its city can reconstitute rather than
+   * start over (see the stand-down in `updateArmies`), but that record is a
+   * standing entitlement, not a body of troops: it must not appear in the
+   * roster, take an order, or be counted as one of the armies the AI has free.
+   */
   armiesOf(faction: number): Army[] {
-    return this.armies.filter((a) => a.owner === faction)
+    return this.armies.filter((a) => a.owner === faction && Sim.alive(a).length > 0)
   }
 
   /** Living units in an army — the thing every strength reading is taken from. */
@@ -772,8 +866,15 @@ export class Sim {
       if (!site.army || site.army.order !== 'idle') return 'Army must be home'
       if (Sim.hasSiege(site.army)) return 'Already escorting one'
     }
-    if (item === 'army' && site.army && 1 - Sim.armyStrength(site.army) < 0.02) {
-      return 'Army ready'
+    if (item === 'army' && site.army) {
+      if (1 - Sim.armyStrength(site.army) < 0.02) return 'Army ready'
+      // Reinforcements are handed out here, not shipped. Replacements spawn on
+      // the army's own anchor, so without this a city could heal a column
+      // standing in front of an enemy wall — the assault that failed simply
+      // reconstituted on the spot and walked back in. The Siege Works has
+      // always said "Army must be home" for exactly this reason; losing men far
+      // from home is what makes a deep attack cost something.
+      if (site.army.order !== 'idle') return 'Army must be home'
     }
     if (this.wizards[site.owner].gold < this.buildSpec(site, item).gold) return TOO_COSTLY
     return null
@@ -1015,7 +1116,7 @@ export class Sim {
     // avatar and faction 0 flies itself, so the copy is skipped rather than
     // asking the caller to feed the wizard its own coordinates back.
     const p = this.player
-    if (!p.dead && !this.opts.allAi) {
+    if (!p.dead && !this.allAi) {
       p.x = playerX
       p.z = playerZ
       p.y = playerY
@@ -1026,6 +1127,7 @@ export class Sim {
     if (slow) {
       this.slowT = 0.25
       this.markHotSites()
+      this.markSiteHolders()
     }
 
     this.updateWizards(dt, frame)
@@ -1047,6 +1149,37 @@ export class Sim {
    * second against wizards and army anchors only, and a site with nothing near
    * it skips targeting entirely until something arrives.
    */
+  /**
+   * Rebuild every site's `holders` mask: who is standing in whose clearing.
+   *
+   * On the slow tick with `markHotSites`, and for the same reason. Both the
+   * banner and the claim rule ask this of every site, and asking it per site
+   * per frame is a hundred and thirty sites against four hundred units sixty
+   * times a second. Quarter-second staleness cannot be seen on a flag and
+   * cannot be exploited against a ten-second consecration, which re-tests
+   * `canConvert` on every tick and breaks the moment this says the ground has
+   * changed hands.
+   *
+   * Wagons are not troops. A caravan is unarmed and dies to anything that looks
+   * at it, so letting one hold ground would mean a trade route rolling past a
+   * mine raised swords over it and froze it against capture.
+   */
+  private markSiteHolders(): void {
+    for (const site of this.sites) site.holders = 0
+    for (const u of this.units) {
+      if (u.dead || u.wagon) continue
+      const bit = u.owner >= 0 ? 1 << u.owner : NEUTRAL_HOLDER
+      for (const site of this.sites) {
+        // Squared, and skipped outright once this faction is already counted —
+        // between them that is most of the work of this pass.
+        if (site.holders & bit) continue
+        const dx = u.x - site.x
+        const dz = u.z - site.z
+        if (dx * dx + dz * dz <= site.radius * site.radius) site.holders |= bit
+      }
+    }
+  }
+
   private markHotSites(): void {
     this.hot.clear()
     // Comfortably outside the engagement range, so a garrison is awake and
@@ -1590,12 +1723,28 @@ export class Sim {
       }
     }
 
-    // Retire armies that are gone, and cut the city's link to them.
+    // An army that has been wiped out stands down; it is not struck off.
+    //
+    // Retiring the record entirely meant annihilation put the city back to
+    // where it stood before it had ever raised troops — the button went back to
+    // "Train Army" at full price, and the whole point of reconstitution is that
+    // a city which has fielded an army once keeps the standing to field it
+    // again. It also threw away the Granary's reason to exist, which is
+    // precisely the city that keeps losing its army.
+    //
+    // The record is emptied and put back at home rather than left where it
+    // died, so it is idle (nothing marches a corpse home to satisfy the
+    // "Army must be home" rule) and its replacements muster in the city that
+    // pays for them.
     for (const site of this.sites) {
-      if (site.army && Sim.alive(site.army).length === 0) {
-        this.armies = this.armies.filter((a) => a !== site.army)
-        site.army = null
-      }
+      const army = site.army
+      if (!army || Sim.alive(army).length > 0) continue
+      army.units = []
+      army.order = 'idle'
+      army.targetSiteId = -1
+      army.fighting = false
+      army.ax = site.x
+      army.az = site.z
     }
   }
 
@@ -2091,6 +2240,11 @@ export class Sim {
     frame: TerrainFrame,
     dimAt: (x: number, z: number) => number,
   ): void {
+    // Whose side the board is drawn from. Faction 0 either way: in a normal
+    // match it is the player, and in attract it is the wizard being followed —
+    // the same one the fog is being drawn for.
+    const viewer = this.player.faction
+
     unitLayer.begin(frame)
     boardLayer.begin(frame)
     banners.begin(frame)
@@ -2114,12 +2268,38 @@ export class Sim {
       //
       // Everything else is a single building sitting on its own pad, so its
       // banner stands just north of it instead of through it.
-      if (site.owner >= 0) {
-        // Sized against what it stands over: a town card is about ten units
-        // tall, so a capital's standard clears the roofline and a mine's clears
-        // the headworks, without either becoming the tallest thing on the map.
-        const city = site.kind === 'city'
-        banners.push(site.x, city ? site.z : site.z - site.radius * 0.42, city ? 10 : 8, tint, dim)
+      // Every place that can change hands flies something, held or not: grey
+      // while nobody owns it, the owner's colours once somebody does, and the
+      // colours stay up until it is consecrated away from them. A lair and a
+      // camp fly nothing at all — they are dens, not holdings, and can never be
+      // anybody's, so a flag over one would promise a capture that is not on
+      // offer.
+      if (site.kind !== 'lair' && site.kind !== 'camp') {
+        // Dark swords: somebody else is holding this ground, so it cannot be
+        // consecrated — the same test `canClaim` makes, from the same mask.
+        // Light swords: the troops standing here are your own. Nothing at all:
+        // the ground is empty and the place is there for the taking.
+        const guarded: BannerGuard = this.heldAgainst(viewer, site)
+          ? 'hostile'
+          : this.heldBy(viewer, site)
+            ? 'friendly'
+            : 'none'
+        if (site.kind === 'city') {
+          // A city is a *place*, not a building, so it is flagged like one: four
+          // standards on the corners of the square inscribed in its own pad,
+          // framing the settlement rather than standing in the middle of it.
+          // One tall pole at the centre had to clear the roofline to be seen,
+          // which made it the tallest thing on the map and hid the city behind
+          // its own flag.
+          const d = site.radius * CITY_BANNER_RING * Math.SQRT1_2
+          for (const [ox, oz] of CITY_BANNERS) {
+            banners.push(site.x + ox * d, site.z + oz * d, 6, tint, dim, guarded)
+          }
+        } else {
+          // Everything else is a single building on its own pad, so its banner
+          // stands just north of it rather than through it.
+          banners.push(site.x, site.z - site.radius * 0.42, 8, tint, dim, guarded)
+        }
       }
       if (site.sprite) {
         const claimed = site.owner >= 0 && site.ownedSprite
@@ -2191,9 +2371,12 @@ export class Sim {
       })
     }
 
-    // The AI wizards. The player's own is the 3D avatar and is not drawn here.
+    // The AI wizards. The player's own is the 3D avatar and is not drawn here —
+    // including in attract mode, where faction 0 is flown by the AI but is still
+    // the thing the camera is following, and so keeps the carpet it had when a
+    // human was steering it. Drawing both puts a sprite inside the avatar.
     for (const w of this.wizards) {
-      if (w.isPlayer || w.dead) continue
+      if (w.dead || w.isPlayer || (this.allAi && w.faction === 0)) continue
       const dim = dimAt(w.x, w.z)
       if (dim <= 0.02) continue
       unitLayer.push({

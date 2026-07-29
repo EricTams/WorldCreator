@@ -110,6 +110,18 @@ export class Hud {
   private prompt: HTMLElement
   private toast: HTMLElement
   private end: HTMLElement
+  private attractEl: HTMLElement
+
+  /**
+   * Watching rather than playing: faction 0 is flown by the AI.
+   *
+   * The panel still reports faction 0 — that is the whole point, it is the
+   * wizard the camera is following — but every control on it stops being a
+   * control, and the banner explains what it is watching.
+   */
+  private attract = false
+  /** Last banner markup, so a caption that has not changed is not rewritten. */
+  private attractHtml = ''
 
   private toastT = 0
   /** What the army list was last built from, so it is only rebuilt when it changes. */
@@ -131,6 +143,7 @@ export class Hud {
         <div class="hud-armies-list"></div>
       </div>
       <div class="hud-bottom">
+        <div class="hud-attract" hidden></div>
         <div class="hud-prompt" hidden></div>
         <div class="hud-city" hidden></div>
         <div class="hud-hotbar"></div>
@@ -162,6 +175,25 @@ export class Hud {
     this.buildHotbar()
     this.toast = q('.hud-toast')
     this.end = q('.hud-end')
+    this.attractEl = q('.hud-attract')
+  }
+
+  /**
+   * Switch the panel between playing and watching.
+   *
+   * Kept out of `reset` deliberately: the mode outlives the match, so an attract
+   * loop that rolls into its next island stays in attract.
+   */
+  setAttract(on: boolean): void {
+    this.attract = on
+    this.element.classList.toggle('is-attract', on)
+    this.attractEl.hidden = !on
+    this.attractHtml = ''
+    if (on) {
+      this.selectedArmy = -1
+      this.armedSpell = null
+      this.pendingCaravan = null
+    }
   }
 
   /** The hotbar's structure, built once. Only its *state* changes per frame. */
@@ -193,7 +225,8 @@ export class Hud {
    */
   activate(spell: Spell): void {
     const w = this.sim.player
-    if (this.sim.winner >= 0 || w.dead) return
+    // Nobody is holding the spellbook while the AI is flying.
+    if (this.attract || this.sim.winner >= 0 || w.dead) return
     const def = SPELLS.find((s) => s.id === spell)
     if (!def) return
 
@@ -208,6 +241,43 @@ export class Hud {
     else if (under && under.owner === w.faction) this.message(`${under.name} is already yours.`)
     else if (under) this.message(`${under.name} is still defended.`)
     else this.message('Stand on a cleared site to consecrate it.')
+  }
+
+  /**
+   * The attract banner: what the wizard being followed is doing, and the few
+   * numbers that make it mean something.
+   *
+   * The headline comes from the simulation where the simulation knows better —
+   * a channel or a death is a fact, not an intention — and otherwise from the
+   * AI's own recorded intent. The second line is the standing position, so a
+   * viewer who looks up mid-match can tell whether the plan is working without
+   * reading the roster.
+   */
+  private refreshAttract(): void {
+    const sim = this.sim
+    const w = sim.player
+    const armies = sim.armiesOf(w.faction)
+    const marching = armies.filter((a) => a.order === 'march').length
+    const holdings = sim.sitesOf(w.faction).length
+    const points = sim.sites.filter((s) => s.kind === 'point' && s.owner === w.faction).length
+
+    const channel = w.channelSiteId >= 0 ? sim.siteById(w.channelSiteId) : null
+    const doing = w.dead
+      ? `Struck down — back in ${Math.ceil(w.respawnT)}s`
+      : channel
+        ? `Consecrating ${channel.name}`
+        : w.intent || 'Sizing up the island'
+
+    const colour = `#${FACTIONS[w.faction].tint.toString(16).padStart(6, '0')}`
+    const html = `
+      <b style="color:${colour}">${FACTIONS[w.faction].name}</b> · ${doing}
+      <br><i>${holdings} holding${holdings === 1 ? '' : 's'} · ${armies.length} arm${armies.length === 1 ? 'y' : 'ies'}${
+        marching ? ` (${marching} marching)` : ''
+      } · ${points} point${points === 1 ? '' : 's'} · ${Math.floor(w.gold)} gold</i>`
+    if (html !== this.attractHtml) {
+      this.attractHtml = html
+      this.attractEl.innerHTML = html
+    }
   }
 
   private refreshHotbar(): void {
@@ -276,9 +346,12 @@ export class Hud {
       .map((z) => {
         const points = sim.sites.filter((s) => s.kind === 'point' && s.owner === z.faction).length
         const colour = `#${FACTIONS[z.faction].tint.toString(16).padStart(6, '0')}`
+        // In attract nobody is "You", but the wizard the camera is following is
+        // still the one the reader is tracking, so it keeps the marked row.
+        const watched = z.isPlayer || (this.attract && z.faction === 0)
         const name = z.isPlayer ? 'You' : FACTIONS[z.faction].name
         return `
-          <div class="hud-charge-row${z.isPlayer ? ' is-you' : ''}">
+          <div class="hud-charge-row${watched ? ' is-you' : ''}">
             <span class="hud-charge-name" style="color:${colour}">${name}</span>
             <span class="hud-charge-bar"><span style="width:${z.charge}%;background:${colour}"></span></span>
             <span class="hud-charge-num">${z.charge.toFixed(0)}%</span>
@@ -296,7 +369,10 @@ export class Hud {
         <div class="hud-channel">Consecrating…
           <span class="hud-channel-bar"><span style="width:${pct}%"></span></span>
         </div>
-        <div class="hud-prompt-note">Hold still. Any hit breaks it.</div>`
+        ${this.attract ? '' : '<div class="hud-prompt-note">Hold still. Any hit breaks it.</div>'}`
+    } else if (this.attract) {
+      // Every other prompt is an instruction, and there is nobody to instruct.
+      this.prompt.hidden = true
     } else if (this.armedSpell) {
       const def = SPELLS.find((s) => s.id === this.armedSpell)
       this.prompt.hidden = false
@@ -313,6 +389,8 @@ export class Hud {
     } else {
       this.prompt.hidden = true
     }
+
+    if (this.attract) this.refreshAttract()
 
     this.refreshHotbar()
 
@@ -613,16 +691,17 @@ export class Hud {
   }
 
   private showEnd(winner: number): void {
-    const won = winner === 0
+    const won = winner === 0 && !this.attract
     this.end.hidden = false
+    const note = this.attract
+      ? `Their charge reached 100% first. Another match starts shortly — <kbd>Esc</kbd> to stop watching.`
+      : won
+        ? 'You held the Points of Power long enough to finish it.'
+        : 'Their charge reached 100% before anyone could take their points.'
     this.end.innerHTML = `
       <div class="hud-end-card">
         <div class="hud-end-title">${won ? 'The Spell of Mastery is yours' : `${FACTIONS[winner].name} has cast the Spell of Mastery`}</div>
-        <div class="hud-end-note">${
-          won
-            ? 'You held the Points of Power long enough to finish it.'
-            : 'Their charge reached 100% before anyone could take their points.'
-        }</div>
+        <div class="hud-end-note">${note}</div>
         <button class="hud-action" type="button">New world</button>
       </div>`
     const btn = this.end.querySelector('.hud-action') as HTMLButtonElement

@@ -16,6 +16,7 @@ import type { Army, SiteState } from './game/sim'
 import { RULES } from './game/rules'
 import type { BuildItem } from './game/rules'
 import { Hud, SPELLS } from './ui/hud'
+import { Menu } from './ui/menu'
 import { FACTIONS } from './game/factions'
 import { planGameMap, planPoints } from './world/gameMap'
 import type { MapPlan } from './world/gameMap'
@@ -172,6 +173,19 @@ const sim = new Sim({
   onMessage: (text) => hud.message(text),
 })
 
+/**
+ * What is on top of the world: nothing, the pause card, or the main menu.
+ *
+ * Kept apart from `attract` rather than folded into one enum, because pausing a
+ * demo has to resume *into* the demo. With one state that needs a second field
+ * remembering where to go back to, which is the same two bits with a harder name.
+ */
+type MenuMode = 'playing' | 'paused' | 'menu'
+let menuMode: MenuMode = 'playing'
+
+/** Whether faction 0 is being flown by the AI while the camera watches it. */
+let attract = false
+
 const hud = new Hud(document.body, sim, {
   onOrder: (army: Army, siteId: number) => sim.orderArmy(army, siteId),
   onRecall: (army: Army) => sim.recallArmy(army),
@@ -193,16 +207,54 @@ const hud = new Hud(document.body, sim, {
   onConvert: (site: SiteState) => {
     if (!sim.beginConvert(sim.player, site)) hud.message('Nothing to consecrate here.')
   },
-  onRestart: () => {
-    params.seed = randomSeed()
-    gui.refreshDisplay()
-    // A new match must open looking at your own wizard. Regenerating on its own
-    // deliberately does *not* move the camera — dragging a terrain slider should
-    // not yank you out of whatever you were inspecting — so starting a match is
-    // the one case that asks for the framing back.
-    reframeOnNextBuild = true
-    regenerate()
+  // "New world" on the end card starts another match in whatever mode this one
+  // was: a watcher who presses it wants the next demo, not a game to play.
+  onRestart: () => startMatch(attract),
+})
+
+/**
+ * Start a fresh match on a fresh island, played or watched.
+ *
+ * The one door into a match. It sets the mode *before* regenerating because the
+ * flag has to be true by the time the worker comes back and `cutSitePads` resets
+ * the simulation — that is where `allAi` is read, and reading it late would give
+ * the first match of a demo a human faction 0 that nothing was driving.
+ */
+function startMatch(asAttract: boolean): void {
+  attract = asAttract
+  hud.setAttract(asAttract)
+  document.body.classList.toggle('is-attract', asAttract)
+  document.body.classList.remove('is-mainmenu')
+  menuMode = 'playing'
+  menu.hide()
+  attractEndT = 0
+  attractWasDead = false
+
+  params.seed = randomSeed()
+  gui.refreshDisplay()
+  // A new match must open looking at your own wizard. Regenerating on its own
+  // deliberately does *not* move the camera — dragging a terrain slider should
+  // not yank you out of whatever you were inspecting — so starting a match is
+  // the one case that asks for the framing back.
+  reframeOnNextBuild = true
+  regenerate()
+}
+
+/** Leave the match on screen and put the main menu over it. */
+function openMainMenu(): void {
+  menuMode = 'menu'
+  document.body.classList.add('is-mainmenu')
+  menu.showMain()
+}
+
+const menu = new Menu(document.body, {
+  onResume: () => {
+    menuMode = 'playing'
+    menu.hide()
   },
+  onExitToMenu: openMainMenu,
+  onNewGame: () => startMatch(false),
+  onAttract: () => startMatch(true),
 })
 
 /**
@@ -637,7 +689,7 @@ function cutSitePads(): void {
   // A new island is a new match. Erosion moves the coastline and so moves every
   // capital, which means the board this match was being played on no longer
   // exists — restarting is the honest answer, not a bug.
-  sim.reset(plan.game)
+  sim.reset(plan.game, attract)
   hud.reset()
 }
 
@@ -963,6 +1015,10 @@ if (import.meta.env.DEV) {
       cards,
       sim,
       hud,
+      menu,
+      /** `__world.startMatch(true)` drops straight into a demo. */
+      startMatch,
+      mode: () => ({ menuMode, attract }),
       unitLayer,
       boardLayer,
       scene,
@@ -992,6 +1048,20 @@ if (import.meta.env.DEV) {
 }
 
 // --- loop -------------------------------------------------------------------
+
+/**
+ * Seconds the end card has been up in attract, and whether the watched wizard
+ * was dead last frame.
+ *
+ * The demo has to end its own matches — there is nobody to press the button —
+ * and it has to notice a respawn, because respawning is a teleport and the
+ * camera has to be carried rather than flown to the far side of the island.
+ */
+let attractEndT = 0
+let attractWasDead = false
+
+/** How long a finished attract match sits on its end card before the next one. */
+const ATTRACT_END_HOLD = 12
 
 /**
  * How much of the canvas is hidden, and by what.
@@ -1134,6 +1204,10 @@ canvas.addEventListener('pointerdown', (e) => {
 })
 
 canvas.addEventListener('pointerup', (e) => {
+  // Nothing on the map is orderable while a card is up or while the AI is
+  // flying. The menu scrim already swallows its own clicks; this covers attract,
+  // where the world is deliberately left uncovered to be watched.
+  if (menuMode !== 'playing' || attract) return
   if (Hud.isHudTarget(e.target)) return
   if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > 6) return
   if (performance.now() - pressT > 450) return
@@ -1242,7 +1316,13 @@ scene.renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1)
 
   const frame = terrainFrame()
-  const playing = sim.ready && sim.winner < 0
+  // A card on screen stops the match but not the picture: the world keeps being
+  // drawn under the menu, it just stops moving. `humanDriving` is the narrower
+  // question of whether *input* means anything — false in attract, where the
+  // match is running perfectly well and nobody is holding the controls.
+  const running = menuMode === 'playing'
+  const playing = sim.ready && sim.winner < 0 && running
+  const humanDriving = playing && !attract
   const wizard = sim.ready ? sim.player : null
 
   // Sprint. Mana is the throttle rather than a cooldown, which makes the wizard's
@@ -1250,7 +1330,7 @@ scene.renderer.setAnimationLoop(() => {
   // arrives — the choice the full doc's boost charges would eventually make
   // properly, standing in for skiing until there is skiing.
   let speedScale = 1
-  if (wizard && playing && !wizard.dead && keys.isDown('ShiftLeft') && wizard.mana > 0) {
+  if (wizard && humanDriving && !wizard.dead && keys.isDown('ShiftLeft') && wizard.mana > 0) {
     speedScale = RULES.wizard.sprint
     wizard.mana = Math.max(0, wizard.mana - RULES.wizard.sprintDrain * dt)
   }
@@ -1261,12 +1341,40 @@ scene.renderer.setAnimationLoop(() => {
   avatar.object.visible = params.avatar.enabled && !frozen
 
   if (frame && params.avatar.enabled && !frozen) {
-    avatar.update(dt, keys, frame, params.avatar, speedScale)
+    // In attract the avatar is steered below, from the wizard the AI is flying;
+    // paused, nothing steers it at all.
+    if (humanDriving) avatar.update(dt, keys, frame, params.avatar, speedScale)
     avatar.updateMarkerVisibility(rig.camera)
   }
 
   if (frame && sim.ready) {
-    sim.update(dt, frame, avatar.position.x, avatar.position.z, avatar.position.y)
+    // Stepped only while playing. Not stepped with dt = 0: the AI throws a
+    // fireball on a condition rather than on a timer, so a zero-length tick is a
+    // world that still fights, silently, behind the pause card.
+    if (playing) {
+      sim.update(dt, frame, avatar.position.x, avatar.position.z, avatar.position.y)
+    }
+
+    // Attract: the simulation flies faction 0, and the avatar follows it. This
+    // is the whole of the camera work — the rig is already pointed at
+    // `avatar.position` (see `syncAvatarVisibility`), so putting the avatar on
+    // the wizard puts the camera on it too, with no camera code involved.
+    if (attract && sim.ready) {
+      const w = sim.player
+      if (!w.dead) {
+        avatar.driveTo(dt, frame, w.x, w.z, params.avatar)
+        // A respawn is a teleport, and the camera has to be moved rather than
+        // flown across the island. Same pair as the human respawn callback —
+        // which the simulation does not fire here, because faction 0 is not the
+        // player any more.
+        if (attractWasDead) {
+          rig.snapFollow()
+          if (params.avatar.followCamera) rig.apply('follow', params.camera)
+        }
+      }
+      attractWasDead = w.dead
+    }
+
     const fogOn = params.fog.enabled && !params.fog.revealAll
     sim.draw(unitLayer, boardLayer, banners, siegeEngines, frame, fogOn ? (x, z) => fogGrid.exploredAt(x, z) : () => 1)
     // Plates last, so they are projected from the camera this frame actually
@@ -1325,16 +1433,40 @@ scene.renderer.setAnimationLoop(() => {
 
   // The spellbook's hotkeys, read straight off the hotbar's own table so a key
   // and its on-screen slot can never disagree about what they cast.
-  if (playing) {
+  if (humanDriving) {
     for (const spell of SPELLS) {
       if (keys.consumePress(spell.code)) hud.activate(spell.id)
     }
   }
 
+  // Escape means "back out of the thing I am in the middle of", and the menu is
+  // the outermost of those rather than a replacement for them: with a spell
+  // armed or an army waiting for a target, the first press still cancels that,
+  // and only a press with nothing pending opens the card. Otherwise arming a
+  // fireball would make the pause key stop pausing.
   if (keys.consumePress('Escape')) {
-    hud.selectedArmy = -1
-    hud.armedSpell = null
-    hud.pendingCaravan = null
+    if (menuMode === 'playing') {
+      const pending = hud.selectedArmy >= 0 || hud.armedSpell !== null || hud.pendingCaravan !== null
+      if (pending && !attract) {
+        hud.selectedArmy = -1
+        hud.armedSpell = null
+        hud.pendingCaravan = null
+      } else {
+        menuMode = 'paused'
+        menu.showPause()
+      }
+    } else if (menuMode === 'paused') {
+      menuMode = 'playing'
+      menu.hide()
+    }
+    // On the main menu Escape has nowhere further out to go.
+  }
+
+  // The demo ends its own matches. A watcher can still press "New world" to cut
+  // it short, or Escape out to the menu.
+  if (attract && running && sim.ready && sim.winner >= 0) {
+    attractEndT += dt
+    if (attractEndT > ATTRACT_END_HOLD) startMatch(true)
   }
 
   keys.endFrame()

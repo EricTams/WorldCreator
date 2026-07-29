@@ -400,6 +400,51 @@ export class Avatar {
     return moving
   }
 
+  /**
+   * Move for one frame under someone else's steering.
+   *
+   * The counterpart of `update` for attract mode: there the simulation decides
+   * where faction 0's wizard is, and the avatar's only job is to be there and to
+   * be facing the way it is going. `placeAt` is not enough for that — it is a
+   * teleport, and used every frame it leaves the carpet sliding sideways at a
+   * fixed heading, which reads as a bug rather than as flying.
+   *
+   * Everything below the steering is `update`'s, deliberately: ride height,
+   * ripple, bank and shadow are how the wizard looks, and it should not look
+   * different depending on who is flying it.
+   */
+  driveTo(
+    dt: number,
+    frame: TerrainFrame,
+    worldX: number,
+    worldZ: number,
+    settings: AvatarSettings,
+  ): boolean {
+    const dx = worldX - this.position.x
+    const dz = worldZ - this.position.z
+    // Only turn when actually travelling. A wizard holding station would
+    // otherwise spin to face the sampling noise in its own position.
+    const moving = Math.hypot(dx, dz) > 0.01
+    if (moving) this.facing = Math.atan2(dx, dz)
+    this.position.x = worldX
+    this.position.z = worldZ
+
+    const ground = Avatar.sampleTerrain(frame, this.position.x, this.position.z)
+    const sea = frame.seaLevel * frame.heightScale
+    this.position.y = Math.max(ground, sea) + this.hoverDistance(settings)
+
+    this.rippleCarpet(dt)
+    if (settings.fly) {
+      this.carpet.rotation.x = 0
+      this.carpet.rotation.z = 0
+    } else {
+      this.alignCarpet(frame, settings.hover)
+    }
+    this.syncObject()
+    this.updateShadow(frame, settings)
+    return moving
+  }
+
   private syncObject(): void {
     this.object.position.copy(this.position)
     this.object.rotation.y = this.facing

@@ -3,7 +3,7 @@ import type { TerrainFrame } from '../world/terrainQuery'
 import { MAX_TIER, RULES } from './rules'
 import type { BuildItem } from './rules'
 import { Sim } from './sim'
-import type { SiteState, Wizard } from './sim'
+import type { Pickup, SiteState, Wizard } from './sim'
 
 /**
  * An AI wizard's whole brain.
@@ -288,11 +288,19 @@ function think(sim: Sim, w: Wizard): void {
 
   // 3. The wizard: run home when hurt, otherwise go claim whatever its armies
   //    have already cleared, otherwise follow the fighting.
+  //
+  //    Every branch below sets `w.intent`, which is what attract mode reads out.
+  //    It is written here and nowhere above deliberately: this section is the
+  //    only one that decides where the *wizard* goes, and the banner is about
+  //    the wizard. An intent set in the army section would be overwritten here a
+  //    line later and never be seen. What the armies are doing is already on
+  //    screen, in the roster and in the banner's own second line.
   if (w.hp < 30) {
     const home = nearestSite(sim, w.x, w.z, (s) => s.owner === w.faction && s.kind === 'city')
     if (home) {
       w.goalX = home.x
       w.goalZ = home.z
+      w.intent = `Hurt — falling back to ${home.name}`
       return
     }
   }
@@ -332,14 +340,19 @@ function think(sim: Sim, w: Wizard): void {
   if (claimable) {
     w.goalX = claimable.x
     w.goalZ = claimable.z
-    if (sim.inCastRange(w, claimable.x, claimable.z)) sim.beginConvert(w, claimable)
+    if (sim.inCastRange(w, claimable.x, claimable.z)) {
+      sim.beginConvert(w, claimable)
+      w.intent = `Consecrating ${claimable.name}`
+    } else {
+      w.intent = `Flying to claim ${claimable.name}`
+    }
     return
   }
 
   // Loot on the ground outranks everything else that is merely nice to do. An
   // army that cleared a lair and left its hoard lying there did the work for
   // nothing, and the wizard is the only thing on the map that can pick it up.
-  let purse: { x: number; z: number } | null = null
+  let purse: Pickup | null = null
   let purseD = 500
   for (const g of sim.pickups) {
     const d = Math.hypot(g.x - w.x, g.z - w.z)
@@ -351,6 +364,7 @@ function think(sim: Sim, w: Wizard): void {
   if (purse) {
     w.goalX = purse.x
     w.goalZ = purse.z
+    w.intent = `Collecting ${purse.gold} gold left on the field`
     return
   }
 
@@ -365,6 +379,7 @@ function think(sim: Sim, w: Wizard): void {
     const camp = nearestSite(sim, w.x, w.z, (s) => s.kind === 'camp' && !sim.isCleared(s))
     if (camp && Math.hypot(camp.x - w.x, camp.z - w.z) < 400) {
       standOff(w, camp)
+      w.intent = `Burning out ${camp.name}`
       return
     }
   }
@@ -373,6 +388,12 @@ function think(sim: Sim, w: Wizard): void {
   if (army) {
     w.goalX = army.ax
     w.goalZ = army.az
+    const dest = sim.siteById(army.targetSiteId)
+    w.intent = dest
+      ? `Escorting the army ${army.order === 'camp' ? 'holding' : 'marching on'} ${dest.name}`
+      : 'Escorting the army'
+  } else {
+    w.intent = 'Holding at home, building up'
   }
 }
 

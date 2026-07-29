@@ -83,11 +83,105 @@ function makeBannerGeometry(): THREE.BufferGeometry {
   return geo
 }
 
+/**
+ * Crossed swords, flown from the top of the pole.
+ *
+ * The banner answers "whose is this"; the swords answer "is anything still
+ * standing for it". Splitting them is what lets a site keep flying its owner's
+ * colours right up until somebody consecrates it, while still saying plainly
+ * that its garrison is dead and it can be walked into — one indicator could
+ * only ever have told half of that.
+ *
+ * Two blades and two crossguards, in the same due-south XY plane the cloth uses,
+ * so the pair reads as one object from the fixed camera.
+ */
+function makeSwordsGeometry(): THREE.BufferGeometry {
+  const positions: number[] = []
+  const colors: number[] = []
+  const index: number[] = []
+
+  /** Centre of the X, in pole-heights. The pole ends at 1. */
+  const cy = 1.11
+  const BLADE = 1
+  const GUARD = 0.5
+
+  /** A rectangle in the XY plane, rotated about the crossing point. */
+  function bar(
+    halfW: number,
+    halfL: number,
+    offset: number,
+    angle: number,
+    shade: number,
+  ): void {
+    const c = Math.cos(angle)
+    const s = Math.sin(angle)
+    const corners: [number, number][] = [
+      [-halfW, offset - halfL],
+      [halfW, offset - halfL],
+      [halfW, offset + halfL],
+      [-halfW, offset + halfL],
+    ]
+    const base = positions.length / 3
+    for (const [px, py] of corners) {
+      positions.push(px * c - py * s, cy + px * s + py * c, 0)
+      colors.push(shade, shade, shade)
+    }
+    index.push(base, base + 1, base + 2, base, base + 2, base + 3)
+  }
+
+  for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+    // Blade, then a wide dark crossguard and a stub of grip below it. Without
+    // the hilt the pair reads as a plain X — a cross, or a cancel mark, which
+    // is very nearly the opposite of what it means. The guard is the widest
+    // part on purpose: at the size this is actually seen it is the only cue
+    // that survives, and it is what makes the two bars read as *swords*.
+    bar(0.0125, 0.105, 0.022, angle, BLADE)
+    bar(0.052, 0.0115, -0.072, angle, GUARD)
+    bar(0.0115, 0.028, -0.112, angle, GUARD)
+  }
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+  geo.setIndex(index)
+  geo.computeVertexNormals()
+  return geo
+}
+
+/**
+ * Whether a site's ground is being held, and by whom — from the point of view
+ * of whoever the board is being drawn for.
+ *
+ * A string rather than a shared numeric constant so that `sim.ts` can say what
+ * it means without importing anything from the renderer: the simulation runs
+ * headless in `tools/matchHarness.ts`, and a value import here would drag
+ * three.js into it.
+ */
+export type BannerGuard = 'none' | 'friendly' | 'hostile'
+
+/**
+ * The two finishes, and why they are a *value* difference rather than a hue.
+ *
+ * Light against dark survives everything this board does to a colour: the fog
+ * multiplies it, the terrain behind it is every shade of green and grey, and
+ * three faction hues are already spoken for. Reading "can I take this" off
+ * bright-versus-black works at a glance and keeps working for anyone who would
+ * not have separated two hues in the first place.
+ */
+const GUARD_TINTS: Record<BannerGuard, number> = {
+  none: 0x000000,
+  friendly: 0xe4ebf4,
+  hostile: 0x0b0e12,
+}
+
 export class Banners {
   readonly object = new THREE.Group()
 
   private mesh: THREE.InstancedMesh
   private material: THREE.MeshBasicMaterial
+  private swords: THREE.InstancedMesh
+  private swordMaterial: THREE.MeshBasicMaterial
+  private swordCount = 0
   private capacity: number
   private count = 0
   private frame: TerrainFrame | null = null
@@ -98,7 +192,10 @@ export class Banners {
   private scale = new THREE.Vector3()
   private colour = new THREE.Color()
 
-  constructor(capacity = 64) {
+  // Every holdable site flies something now, not just the ones somebody owns,
+  // a generated island carries well over a hundred of them, and a city spends
+  // four on its own.
+  constructor(capacity = 512) {
     this.capacity = capacity
     // Unlit, deliberately. A banner is an *ownership readout* before it is
     // scenery: blue has to mean "mine" at a glance, and it has to be the same
@@ -119,20 +216,41 @@ export class Banners {
     this.mesh.frustumCulled = false
     this.mesh.count = 0
     this.object.add(this.mesh)
+
+    this.swordMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      fog: true,
+    })
+    this.swords = new THREE.InstancedMesh(makeSwordsGeometry(), this.swordMaterial, capacity)
+    this.swords.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.swords.frustumCulled = false
+    this.swords.count = 0
+    this.object.add(this.swords)
   }
 
   begin(frame: TerrainFrame): void {
     this.frame = frame
     this.count = 0
+    this.swordCount = 0
   }
 
   /**
    * Raise a banner at a site.
    *
    * `height` is in world units — sized by the caller from what it is standing
-   * over, so a capital's standard is visibly taller than a mine's.
+   * over, so a capital's standard is visibly taller than a mine's. `guard` is
+   * one of `GUARD_NONE` / `GUARD_FRIENDLY` / `GUARD_HOSTILE`: whether anything
+   * is standing on this ground, and whose.
    */
-  push(x: number, z: number, height: number, tint: number, dim = 1): void {
+  push(
+    x: number,
+    z: number,
+    height: number,
+    tint: number,
+    dim = 1,
+    guard: BannerGuard = 'none',
+  ): void {
     const frame = this.frame
     if (!frame || this.count >= this.capacity) return
     const i = this.count++
@@ -150,16 +268,33 @@ export class Banners {
     // loudest thing on a site and would otherwise burn through unexplored ground.
     this.colour.set(tint).multiplyScalar(0.35 + 0.65 * dim)
     this.mesh.setColorAt(i, this.colour)
+
+    if (guard === 'none' || this.swordCount >= this.capacity) return
+    // Same transform, so the swords ride the pole they belong to.
+    const s = this.swordCount++
+    this.swords.setMatrixAt(s, this.scratch)
+    // Blackened iron is already at the bottom of the range, so fogging it
+    // further only loses it against dark ground: the hostile mark keeps its
+    // value and lets the fog take it through the cloth it stands over.
+    const fade = guard === 'hostile' ? 1 : 0.35 + 0.65 * dim
+    this.colour.set(GUARD_TINTS[guard]).multiplyScalar(fade)
+    this.swords.setColorAt(s, this.colour)
   }
 
   end(): void {
     this.mesh.count = this.count
     this.mesh.instanceMatrix.needsUpdate = true
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true
+
+    this.swords.count = this.swordCount
+    this.swords.instanceMatrix.needsUpdate = true
+    if (this.swords.instanceColor) this.swords.instanceColor.needsUpdate = true
   }
 
   dispose(): void {
     this.mesh.geometry.dispose()
     this.material.dispose()
+    this.swords.geometry.dispose()
+    this.swordMaterial.dispose()
   }
 }
