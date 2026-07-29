@@ -68,23 +68,25 @@ const SINK = 0.05
  *
  * The threshold exists because two genuinely different things are drawn with the
  * same circle. A unit's marker is a couple of units across — smaller than the
- * figure standing on it — so the ground beneath it *is* a plane, the centre
- * normal describes that plane, and there are several hundred of them a frame.
- * A site's ownership decal is 19 to 44 units across (`site.radius` scaled, and
- * that is the defenders' leash, not a measure of the building): it reaches well
- * past the levelled plaza at its centre and out over whatever the landscape is
- * doing, and there are at most a few dozen.
+ * figure standing on it, and well inside one terrain cell — so the ground under
+ * it really is a plane, the centre normal really does describe that plane, and
+ * there are several hundred of them a frame. A site's ownership decal marks a
+ * *place*: it runs from 5 units at a lair to about 18 at a capital's village,
+ * so it reaches past the small terrace cut for the building and out onto ground
+ * that is still doing whatever the landscape does. There are a hundred-odd.
  *
- * A flat circle that wide is what the clipping complaint was about. Past the
- * plaza the ground rolls, and a rigid plane through the middle of it buries its
- * uphill half in the hillside and floats the downhill half in the air — the
- * centre tilt actively making it worse, because tipping the disc to match the
- * slope is exactly what drives its uphill rim into the ground.
+ * A rigid circle out there is the clipping this was written for: it buries its
+ * uphill half in the hillside and floats the downhill half in the air, with the
+ * centre tilt making it worse rather than better, because tipping the disc to
+ * match the slope is exactly what drives its uphill rim into the ground.
  *
- * 6 puts every unit, wagon and wizard marker on the cheap instanced path and
- * every site decal on the conformed one, with a wide margin either side.
+ * 4 is the gap between the two populations. Markers are 1.6 to 3; the smallest
+ * site decal is 5 (`MIN_SITE_DECAL` in the sim). Worth re-checking if either of
+ * those numbers moves: this sat at 6 while decals were sized from the defenders'
+ * leash and ran 19 to 44 units, and when they were cut down to the buildings
+ * they mark, 6 quietly put nine sites in ten back on the flat path.
  */
-const CONFORM_ABOVE = 6
+const CONFORM_ABOVE = 4
 
 /**
  * Rings of a conformed disc and their opacity, as fractions of the radius.
@@ -102,22 +104,27 @@ const CONFORM_ALPHA = [0.42, 0.38, 0.34, 0.15, 0]
 /**
  * Vertices around each ring of a conformed disc.
  *
- * 24 puts the rim samples about 11 world units apart on the largest decal on
- * the board, which is a little over one 8-unit terrain cell — close enough to
- * the grid's own resolution that what the chords cut off is the sub-cell detail
- * amplification added, not the shape of the hill.
+ * 24 puts the rim samples under 5 world units apart on the largest decal on the
+ * board — comfortably inside an 8-unit terrain cell, so what the chords cut off
+ * is the sub-cell detail amplification added rather than the shape of the hill.
+ * A lair's 5-unit decal is finely sampled indeed at this count, but it costs
+ * nothing worth saving: the vertices are written once and then cached.
  */
 const CONFORM_SEGMENTS = 24
 
 /**
  * How many conformed discs may be in flight at once.
  *
- * Only sites reach the threshold, and a generated map carries well under a
- * hundred of them. Overflow falls back to the flat instanced disc rather than
- * dropping the decal — worst case a site draws the way it used to, which is a
- * blemish, where a missing ownership colour is misinformation.
+ * Only sites reach the threshold, so this is a site budget. A default board is
+ * about 132 of them, and the city count is a slider that goes to 30, which puts
+ * the ceiling near 150 — hence a figure with real headroom rather than one
+ * trimmed to today's map.
+ *
+ * Overflow falls back to the flat instanced disc rather than dropping the decal.
+ * A site drawn the old way is a blemish; a site with no ownership colour at all
+ * is misinformation.
  */
-const CONFORM_CAPACITY = 128
+const CONFORM_CAPACITY = 256
 
 /**
  * Clearance above the sampled surface, as a fraction of the disc's radius.

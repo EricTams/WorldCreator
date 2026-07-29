@@ -2,6 +2,8 @@ import type { TerrainFrame } from '../world/terrainQuery'
 import { terrainHeightAt } from '../world/terrainQuery'
 import type { MapPlan, MapSite, MonumentKind, Owner, ResourceKind } from '../world/gameMap'
 import { NOBODY } from '../world/gameMap'
+import { capitalClearing } from '../world/sites'
+import { spriteWidthOf } from '../assets/spriteScale'
 import {
   ANIM_FPS,
   ARCHETYPE,
@@ -326,6 +328,35 @@ const CITY_BANNERS: [number, number][] = [
  * directions and stopped reading as one town's.
  */
 const CITY_BANNER_RING = 0.2
+
+/**
+ * Smallest an ownership decal is allowed to get, in world units.
+ *
+ * The rule below sizes a decal from the card standing on it, and the smallest
+ * cards on the board — an observatory, a shrine — are 2.5 units wide. A decal
+ * that small would be hidden underneath the very sprite it is colouring. 5 is
+ * about half an avatar-height of coloured ground showing past the narrowest
+ * building, which is enough to read as "someone owns this".
+ */
+const MIN_SITE_DECAL = 5
+
+/**
+ * Radius of the ownership decal under a lone site.
+ *
+ * Sized from the *card*, not from `site.radius`. The radius is the defenders'
+ * leash and the test for what you are standing on; it is not a measure of the
+ * place, and reading it as one drew a 32-unit circle around a lair whose card
+ * is five units wide — six times the building, a coloured field with something
+ * small in the middle of it rather than a marked building. `sites.ts` makes the
+ * same argument about the terraces these sites used to get cut.
+ *
+ * One card width as a radius means the colour extends half a width past the
+ * sprite on every side: unmistakably attached to the building, and unmistakably
+ * not a territory.
+ */
+function siteDecalRadius(sprite: SpriteKey, scale: number): number {
+  return Math.max(spriteWidthOf(sprite) * scale, MIN_SITE_DECAL)
+}
 
 export class Sim {
   sites: SiteState[] = []
@@ -2303,14 +2334,16 @@ export class Sim {
       }
       if (site.sprite) {
         const claimed = site.owner >= 0 && site.ownedSprite
+        const sprite = (claimed ? site.ownedSprite : site.sprite) as SpriteKey
+        const scale = site.kind === 'point' ? 1.35 : 1
         boardLayer.push({
-          sprite: (claimed ? site.ownedSprite : site.sprite) as SpriteKey,
+          sprite,
           x: site.x,
           z: site.z,
           tint,
-          discRadius: site.radius * 0.8,
+          discRadius: siteDecalRadius(sprite, scale),
           dim,
-          scale: site.kind === 'point' ? 1.35 : 1,
+          scale,
         })
       } else {
         // A city's building is drawn by the static card layer; all this adds is
@@ -2321,7 +2354,12 @@ export class Sim {
           x: site.x,
           z: site.z,
           tint,
-          discRadius: site.radius * 0.95,
+          // The village, not the leash: the ring of houses plus the terrace they
+          // stand on. This is the same number `cutSitePads` levels the ground
+          // to, so the colour stops exactly where the prepared ground does —
+          // about 6 units past the outermost house, against the 46 a capital's
+          // leash radius was drawing.
+          discRadius: capitalClearing(),
           dim,
           discOnly: true,
         })
