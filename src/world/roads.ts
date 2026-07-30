@@ -4,36 +4,29 @@
  * Pure TypeScript, no three.js — same rule as the rest of `world/`. This decides
  * *where* road is; `render/roadLayer.ts` decides what it looks like.
  *
- * Two rules decide everything here, and the second is the interesting one.
+ * **Everything joins its three nearest.** Every site on the board reaches for
+ * the three places closest to it — city, mine, monument, lair, camp, no
+ * exceptions — and the pairs are de-duplicated, so nothing is ever left with no
+ * road and a place several neighbours all chose becomes a junction. There is no
+ * distance limit and no trunk tier: the network's shape falls out of where the
+ * sites happen to be, which is the same thing that decides everything else
+ * about how a map plays.
  *
- * **Roads run between neighbours, not across the island.** There is no trunk
- * network and nothing guarantees you can follow tarmac from one coast to the
- * other. Each place is linked to the few places near it, and that is all. A
- * fully connected network would be a second map drawn over the first, competing
- * with the territory colours for the same job; a local link says only "these
- * two are neighbours", which is a smaller and truer thing to say.
+ * **Everything routed is drawn**, for now. See `CUT_TO_COVER`: the machinery to
+ * pave only where a road cuts through vegetation is intact and still measured,
+ * but switched off, so what you see on the ground is exactly the network the
+ * router built. That makes a bad route and a deliberately-unpaved one tell
+ * apart, which they do not when both are simply an absence.
  *
- * **Road is only drawn where it cuts through something.** A path across open
- * pasture is invisible in this art and would be invisible in life — bare ground
- * already reads as passable, so paving it spends pixels to say nothing. Where a
- * route crosses a wood, though, the wood has to open for it, and *that* is worth
- * drawing: the gap in the canopy is the road. So the raster is the intersection
- * of "a route goes here" with "vegetation would be here", and the same predicate
- * that puts road down is the one that takes the trees away. Cross a meadow and
- * there is simply nothing to see.
- *
- * The one exception is a town, which is paved whether or not anything grew
- * there. A town square is a built thing, not a worn one.
- *
- * Lairs and camps are linked to nothing on purpose. Nobody keeps a road to a
- * monster.
+ * A town is paved whether or not anything grew there — a town square is a built
+ * thing, not a worn one — and that stays true either way.
  */
 
 import type { Heightmap } from './heightmap'
 import { sampleHeightAndGradient } from './heightmap'
 import { BIOMES, sampleBiomeAt } from './biome'
 import type { BiomeField } from './biome'
-import type { MapSite, SiteKind } from './gameMap'
+import type { MapSite } from './gameMap'
 import type { StandField } from './sites'
 import { ROAD_MATERIALS } from '../assets/roads'
 import type { RoadMaterial } from '../assets/roads'
@@ -87,29 +80,27 @@ const SLOPE_REFERENCE = 0.22
 const REUSE_COST = 0.15
 
 /**
- * How many near neighbours a place is linked to, and how far counts as near.
+ * How many nearest places each place reaches for.
  *
- * The reach is the number that decides whether this reads as neighbours calling
- * on each other or as a road network. Median distance to a site's nearest
- * neighbour is 86 units and cities sit 190 to 300 apart, so 170 links a place to
- * the handful of things in its own valley and essentially never to the next
- * city — which is the intent. Raise it and the local links start chaining into
- * exactly the cross-island network this is not.
+ * Every linkable place reaches, not just the cities — a mine and the node in
+ * the next valley are joined whether or not a capital cared about either. Three
+ * is enough to make the network connected in practice while leaving it visibly
+ * a network rather than a mesh.
+ *
+ * There is deliberately no distance limit. An earlier version capped reach at
+ * 170 units so that a link meant "these two are neighbours", and the cost was
+ * that an isolated place — one with nothing inside the cap — got no roads at
+ * all, which reads as a bug rather than as a statement about its isolation.
+ * Three nearest, however far they turn out to be, guarantees everything is
+ * joined to something, and on a crowded part of the map they are short anyway.
  *
  * Links are symmetric and de-duplicated, so three each does not mean three
- * roads out of every door; it means a place reaches for three and keeps
- * whichever of those, plus whichever reached back, survive the terrain.
+ * roads out of every door: two places that each pick the other share one road,
+ * and a popular place ends up with more than three while a remote one keeps
+ * exactly its three. That asymmetry is worth having — it is the difference
+ * between a crossroads and a dead end.
  */
 const LINK_NEIGHBOURS = 3
-const LINK_REACH = 170
-
-/**
- * Which kinds of place are worth linking.
- *
- * Everything a wizard would have reason to visit repeatedly. Lairs and camps are
- * absent deliberately — see the header.
- */
-const LINK_KINDS: readonly SiteKind[] = ['city', 'point', 'monument', 'outpost', 'mine', 'node']
 
 /**
  * How deep into a stand the vegetation has to be before road is drawn, as a
@@ -130,8 +121,17 @@ const LINK_KINDS: readonly SiteKind[] = ['city', 'point', 'monument', 'outpost',
  * because a bar set at a meadow's idea of "properly inside" is past the deepest
  * point a sparse territory's stands ever reach. Scaling by the territory's own
  * cover asks the same question of each: is this the thick of it, for here?
+ *
+ * Down from 0.12, which asked for the thick of it far too literally. Read off
+ * the debug overlay on a road leaving a capital: the tiles either side of the
+ * gate scored 0.4, 0.6, 0.9 — all genuinely inside cover, all rejected — and
+ * only three tiles in the whole 27-tile route cleared the bar. The territory's
+ * woods simply are not that deep near a town, which is exactly where a road is
+ * most wanted. At 0.04 the bar is "meaningfully inside a stand" rather than
+ * "at its heart", and anything with no cover at all still scores negative and
+ * still gets nothing, which is the part that has to keep holding.
  */
-const CUT_DEPTH_SHARE = 0.12
+const CUT_DEPTH_SHARE = 0.04
 
 /**
  * Cells of road either side of a gap that get filled in anyway.
@@ -154,13 +154,39 @@ const CUT_BRIDGE = 8
  * with no line through it and nothing left standing to have been cut. On the
  * meadow those blobs read as bald spots in the turf.
  *
- * A cut only reads as a cut when it is much longer than it is wide. The road is
- * one routing cell across, so at 14 it is fourteen times longer than it is wide
- * — unmistakably a line — and 70 world units, about three tree-heights, so
- * there is a real stretch of it to see. Anything shorter is dropped whole
- * rather than shortened, and the trees stay.
+ * A cut only reads as a cut when it is longer than it is wide. The road is one
+ * routing cell across, so this is also its aspect ratio: at 4 a cut is four
+ * times longer than it is wide and 20 world units end to end, which is a short
+ * length of road rather than a patch.
+ *
+ * Down from 14, which was set against the blob failure above and was solving it
+ * twice over. The blobs had two causes and the other one — 2x2 blocks stamped
+ * per routing cell, meeting only at their corners on every diagonal — is now
+ * fixed properly in `rasterise`, so the length rule no longer has to compensate
+ * for a rasteriser that could not draw a thin line. Measured against what it
+ * was throwing away: a road leaving a capital had cover running 1.7, 1.9, 1.3
+ * over three tiles and was discarded whole for want of eleven more. Cover near
+ * a town arrives in bursts of three to six tiles, and those bursts are the
+ * roads most worth having.
  */
-const CUT_MIN_RUN = 14
+const CUT_MIN_RUN = 4
+
+/**
+ * Whether to pave only where a route cuts through vegetation.
+ *
+ * Off for now: every routed link is drawn end to end, open field included. The
+ * cut rule and its two smoothing passes are left intact below and are still
+ * measured — the debug overlay draws the score for every tile either way — so
+ * turning this back on is one word and changes nothing else.
+ *
+ * The reason to have it off is that the two questions are easier to answer
+ * apart than together. "Does the network go to sensible places, and does the
+ * drawn road look right?" is about routing and rasterising; "should this
+ * stretch exist?" is about cover. With the cut rule on, a bad route and a
+ * correctly-declined one look identical — an absence — which is exactly the
+ * confusion that made the Stonebury exits hard to reason about.
+ */
+const CUT_TO_COVER = false
 
 export interface RoadNetwork {
   /**
@@ -178,8 +204,48 @@ export interface RoadNetwork {
   /** World XZ of cell (0, 0)'s centre. */
   originX: number
   originZ: number
-  /** Centrelines in world space, for anything that needs the route rather than the raster. */
-  paths: readonly (readonly { x: number; z: number }[])[]
+  /**
+   * Every link that was routed, paved or not.
+   *
+   * The whole centreline is kept, not just the stretches that became road,
+   * because the two are different claims and the difference is the thing worth
+   * being able to look at. `cells` says what is drawn; this says what was
+   * *meant* — which pairs of places the network considers neighbours and which
+   * way the ground let a route between them run. Only where the two disagree,
+   * and why, tells you whether a missing road is a routing failure or the cut
+   * rule correctly declining to pave a field.
+   *
+   * Nothing in the game reads this. The debug overlay and the audit do.
+   */
+  routes: readonly RoadRoute[]
+}
+
+/** One neighbour link: where it went, and how much of it was paved. */
+export interface RoadRoute {
+  /** The places joined, in world space. */
+  from: { x: number; z: number }
+  to: { x: number; z: number }
+  /** The routed centreline, one point per routing cell. */
+  points: readonly { x: number; z: number }[]
+  /**
+   * Per point of `points`: did this cell become road?
+   *
+   * Parallel to `points` rather than a filtered second list, so a consumer can
+   * draw the intended route and the drawn one in one walk and see exactly where
+   * the road enters and leaves cover.
+   */
+  paved: readonly boolean[]
+  /**
+   * Per point of `points`: how much vegetation there is here, as a multiple of
+   * how much it takes to be worth paving. 1 is exactly the bar.
+   *
+   * This is the number the cut rule actually decides on, before the two passes
+   * that smooth its verdict — gap bridging and the minimum-run filter. So a
+   * cell can be paved with a score under 1 (bridged across a hole in a wood) or
+   * unpaved with a score over 1 (part of a run too short to be worth drawing),
+   * and those two disagreements are precisely the ones worth being able to see.
+   */
+  score: readonly number[]
 }
 
 /** Terrain the router has to cross. */
@@ -436,23 +502,22 @@ function markBuilt(path: readonly number[], built: Uint8Array): void {
 }
 
 /**
- * Every pair of places near enough to have worn a path between them.
+ * Every road anywhere wants: each place's `LINK_NEIGHBOURS` nearest.
  *
- * Each node reaches for its `LINK_NEIGHBOURS` nearest within `LINK_REACH`, and
- * the pairs are then de-duplicated, so the result is symmetric and a popular
- * place can end up with more links than an isolated one — which is the right
- * asymmetry to have.
+ * Every node reaches, and every node is reachable. Pairs are de-duplicated
+ * after everyone has chosen, so the result is symmetric and a place that
+ * several neighbours all picked ends up a junction.
  *
- * O(n²) over about eighty nodes. A grid would be faster and is not worth the
- * code; this runs once per map, next to an erosion pass that costs a thousand
- * times more.
+ * O(n²) over about eighty places. A spatial index would be faster and is not
+ * worth the code; this runs once per map, next to an erosion pass that costs a
+ * thousand times more.
  *
  * Sorted by length before returning, shortest first. That ordering is load
  * bearing: routes laid earlier are discounted for reuse by routes laid later,
  * so doing the short obvious links first gives the longer ones something
  * sensible to join, rather than the other way round.
  */
-function neighbourLinks(nodes: readonly { x: number; z: number }[]): [number, number][] {
+function nearestLinks(nodes: readonly { x: number; z: number }[]): [number, number][] {
   const n = nodes.length
   if (n < 2) return []
 
@@ -462,7 +527,6 @@ function neighbourLinks(nodes: readonly { x: number; z: number }[]): [number, nu
     return dx * dx + dz * dz
   }
 
-  const reach2 = LINK_REACH * LINK_REACH
   const seen = new Set<number>()
   const out: { a: number; b: number; d: number }[] = []
 
@@ -470,9 +534,7 @@ function neighbourLinks(nodes: readonly { x: number; z: number }[]): [number, nu
     const near: { b: number; d: number }[] = []
     for (let b = 0; b < n; b++) {
       if (b === a) continue
-      const d = d2(a, b)
-      if (d > reach2) continue
-      near.push({ b, d })
+      near.push({ b, d: d2(a, b) })
     }
     near.sort((p, q) => p.d - q.d)
     for (const { b, d } of near.slice(0, LINK_NEIGHBOURS)) {
@@ -545,12 +607,25 @@ function cutMask(
   routeSize: number,
   origin: number,
   stands: StandField,
-): boolean[] {
-  const keep = path.map((c) => {
+): { keep: boolean[]; score: number[] } {
+  // The raw verdict per cell, and the number behind it. `score` is the stand
+  // depth as a multiple of the threshold it had to clear, so 1 is exactly the
+  // bar: at or above and this cell has enough vegetation to be worth cutting,
+  // below and it does not. Kept because "the road stops here" has several
+  // possible causes and only this number distinguishes them — see the debug
+  // overlay, which draws it per tile.
+  const score = path.map((c) => {
     const x = origin + (c % routeSize) * ROUTE_CELL
     const z = origin + ((c / routeSize) | 0) * ROUTE_CELL
-    return stands.depth(x, z) > CUT_DEPTH_SHARE * stands.cover(x, z)
+    const bar = CUT_DEPTH_SHARE * stands.cover(x, z)
+    return bar > 0 ? stands.depth(x, z) / bar : 0
   })
+  // Everything routed is paved, and the smoothing passes have nothing to do.
+  // The scores above are still computed and returned: they cost one noise
+  // lookup a tile and they are what the debug overlay draws.
+  if (!CUT_TO_COVER) return { keep: score.map(() => true), score }
+
+  const keep = score.map((s) => s > 1)
 
   let gap = 0
   for (let i = 0; i < keep.length; i++) {
@@ -578,20 +653,91 @@ function cutMask(
     run = 0
   }
 
-  return keep
+  return { keep, score }
+}
+
+/**
+ * Centre of the 2x2 block of draw cells one routing cell covers.
+ *
+ * Half a draw cell off the grid's own centres, because a two-wide road is
+ * centred on the *boundary* between its two cells, not on either of them.
+ */
+function blockCentre(
+  net: RoadNetwork,
+  c: number,
+  routeSize: number,
+): { x: number; z: number } {
+  return {
+    x: net.originX + ((c % routeSize) * 2 + 0.5) * net.cellSize,
+    z: net.originZ + (((c / routeSize) | 0) * 2 + 0.5) * net.cellSize,
+  }
+}
+
+/**
+ * Paint every draw cell within `half` of the segment a–b.
+ *
+ * A distance test rather than a block fill, which is the whole point: see
+ * `rasterise`. The bounding box is the segment's own, grown by the half-width,
+ * so a step costs about five cells by five however the road is oriented.
+ */
+function stampSegment(
+  net: RoadNetwork,
+  a: { x: number; z: number },
+  b: { x: number; z: number },
+  half: number,
+  field: BiomeField | null,
+): void {
+  const plaza = MATERIAL_INDEX[PLAZA_MATERIAL] + 1
+  const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x) - half - net.originX) / net.cellSize))
+  const i1 = Math.min(net.size - 1, Math.ceil((Math.max(a.x, b.x) + half - net.originX) / net.cellSize))
+  const j0 = Math.max(0, Math.floor((Math.min(a.z, b.z) - half - net.originZ) / net.cellSize))
+  const j1 = Math.min(net.size - 1, Math.ceil((Math.max(a.z, b.z) + half - net.originZ) / net.cellSize))
+
+  const dx = b.x - a.x
+  const dz = b.z - a.z
+  const len2 = dx * dx + dz * dz
+  const half2 = half * half + 1e-6
+
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const x = net.originX + i * net.cellSize
+      const z = net.originZ + j * net.cellSize
+      let t = len2 > 0 ? ((x - a.x) * dx + (z - a.z) * dz) / len2 : 0
+      t = t < 0 ? 0 : t > 1 ? 1 : t
+      const px = a.x + dx * t - x
+      const pz = a.z + dz * t - z
+      if (px * px + pz * pz > half2) continue
+      const k = j * net.size + i
+      // A town's paving is not overwritten by the country road running into
+      // it. The plaza is stamped first and is the more specific statement.
+      if (net.cells[k] === plaza) continue
+      const biome = field ? BIOMES[sampleBiomeAt(field, x, z).a].id : 'meadow'
+      net.cells[k] = MATERIAL_INDEX[materialForBiome(biome)] + 1
+    }
+  }
 }
 
 /**
  * Rasterise the cut stretches of a routed path onto the draw grid.
  *
- * One routing cell becomes the 2x2 block of draw cells it covers, which is
- * where the road's two-tile width comes from. The material is resampled per
+ * Painted as a swept band along the centreline, *not* as one 2x2 block of draw
+ * cells per routing cell. The block version is the obvious implementation and
+ * it breaks on exactly the case the router produces most: the route grid is
+ * eight-connected, so a diagonal step moves one cell in both axes, and the two
+ * 2x2 blocks it stamps meet only at a single corner. The road pinches to
+ * nothing at every diagonal — a chain of squares touching at their corners
+ * rather than a road. It is worst where roads look best otherwise, because a
+ * route that is not following an axis is diagonal most of the way.
+ *
+ * Sweeping a half-width of one draw cell along the segment between successive
+ * centres gives two cells across on the axes — the same width as before — and
+ * an unbroken two-cell band on the diagonals. The material is resampled per
  * cell rather than per path, so a road crossing a border changes surface on the
  * border rather than at whichever end happened to decide.
  *
- * Returns the cells actually paved, so the caller can discount them for reuse.
- * Only paved cells are worth reusing: a later route that followed the unpaved
- * part of an earlier one would be following a road that is not there.
+ * Returns the routing cells actually paved, so the caller can discount them for
+ * reuse. Only paved cells are worth reusing: a later route that followed the
+ * unpaved part of an earlier one would be following a road that is not there.
  */
 function rasterise(
   net: RoadNetwork,
@@ -600,28 +746,22 @@ function rasterise(
   routeSize: number,
   field: BiomeField | null,
 ): number[] {
-  const scale = ROUTE_CELL / net.cellSize
+  // One draw cell. On an axis this keeps exactly the two cells either side of
+  // the block boundary and rejects their neighbours at 1.5 cells out.
+  const half = net.cellSize
   const paved: number[] = []
+
   for (let n = 0; n < path.length; n++) {
     if (!keep[n]) continue
-    const c = path[n]
-    paved.push(c)
-    const i0 = Math.round((c % routeSize) * scale)
-    const j0 = Math.round(((c / routeSize) | 0) * scale)
-    for (let j = j0; j < j0 + scale; j++) {
-      for (let i = i0; i < i0 + scale; i++) {
-        if (i < 0 || j < 0 || i >= net.size || j >= net.size) continue
-        const k = j * net.size + i
-        // A town's paving is not overwritten by the country road running into
-        // it. The plaza is stamped first and is the more specific statement.
-        if (net.cells[k] === MATERIAL_INDEX[PLAZA_MATERIAL] + 1) continue
-        const x = net.originX + i * net.cellSize
-        const z = net.originZ + j * net.cellSize
-        const biome = field ? BIOMES[sampleBiomeAt(field, x, z).a].id : 'meadow'
-        net.cells[k] = MATERIAL_INDEX[materialForBiome(biome)] + 1
-      }
-    }
+    paved.push(path[n])
+    const a = blockCentre(net, path[n], routeSize)
+    // Sweep to the next kept cell. Where there is none — the last cell of a
+    // cut — the segment collapses to a point and stamps a round cap, which is
+    // how a road should end anyway.
+    const b = n + 1 < path.length && keep[n + 1] ? blockCentre(net, path[n + 1], routeSize) : a
+    stampSegment(net, a, b, half, field)
   }
+
   return paved
 }
 
@@ -663,10 +803,22 @@ export function buildRoadNetwork(
     cellSize: ROAD_CELL,
     originX: origin,
     originZ: origin,
-    paths: [],
+    routes: [],
   }
 
-  const linked = sites.filter((s) => LINK_KINDS.includes(s.kind))
+  // Every site, with no filter on kind, and that is deliberate.
+  //
+  // There used to be one: lairs and camps were held out on the reasoning that
+  // nobody maintains a road to a monster. It reads well and it is wrong on the
+  // board — it silently left 40 of 132 sites with no road at all, a camp
+  // standing in the middle of a network that flowed around it, which looks like
+  // a bug in the router rather than a statement about who lives there. A road
+  // to a lair is fine in the fiction too: somebody cut it once, and something
+  // else lives at the end of it now.
+  //
+  // Unfiltered rather than a list of all eight kinds, so a kind added later
+  // joins the network instead of quietly falling out of it.
+  const linked = sites
   if (linked.length < 2) return net
 
   // Town squares first, so a country road arriving at one stops at the paving
@@ -693,18 +845,35 @@ export function buildRoadNetwork(
   // cannot be reached its links simply fail and the rest stands.
   const nodeCell = linked.map((s) => cellOf(s.x, s.z, routeSize, origin))
 
-  const paths: { x: number; z: number }[][] = []
-  for (const [a, b] of neighbourLinks(linked)) {
+  const routes: RoadRoute[] = []
+  for (const [a, b] of nearestLinks(linked)) {
     const p = route(nodeCell[a], nodeCell[b], routeSize, cost, built, scratch)
-    if (!p) continue
-    const keep = cutMask(p, routeSize, origin, stands)
+    // A link the terrain refused is still worth recording — a route that could
+    // not be found and a route that was found and not paved look identical on
+    // the ground, and the overlay should be able to tell them apart.
+    if (!p) {
+      routes.push({
+        from: { x: linked[a].x, z: linked[a].z },
+        to: { x: linked[b].x, z: linked[b].z },
+        points: [],
+        paved: [],
+        score: [],
+      })
+      continue
+    }
+    const { keep, score } = cutMask(p, routeSize, origin, stands)
     const paved = rasterise(net, p, keep, routeSize, field)
-    if (paved.length === 0) continue
-    markBuilt(paved, built)
-    paths.push(toWorld(paved, routeSize, origin))
+    if (paved.length > 0) markBuilt(paved, built)
+    routes.push({
+      from: { x: linked[a].x, z: linked[a].z },
+      to: { x: linked[b].x, z: linked[b].z },
+      points: toWorld(p, routeSize, origin),
+      paved: keep,
+      score,
+    })
   }
 
-  net.paths = paths
+  net.routes = routes
   return net
 }
 

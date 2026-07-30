@@ -53,6 +53,7 @@ import type { DecoSpot, SitePad } from './world/sites'
 import { buildRoadNetwork, roadAt } from './world/roads'
 import type { RoadNetwork } from './world/roads'
 import { RoadLayer } from './render/roadLayer'
+import { RoadDebugLayer } from './render/roadDebug'
 import { terrainHeightAt } from './world/terrainQuery'
 import { randomSeed } from './world/prng'
 import type { WorkerRequest, WorkerResponse } from './world/protocol'
@@ -120,6 +121,8 @@ scene.scene.add(cards.object)
 
 const roads = new RoadLayer(scene.renderer.capabilities.getMaxAnisotropy())
 scene.scene.add(roads.object)
+const roadDebug = new RoadDebugLayer()
+scene.scene.add(roadDebug.object)
 /**
  * Where the roads went, kept because the scatter has to agree with it.
  *
@@ -763,6 +766,7 @@ function buildCards(): void {
       })
     : null
   roads.build(roadNet, frame)
+  roadDebug.build(roadNet, frame, params.render.roadDebug)
 
   // The verge, not the kerb. A prop is placed by its foot but drawn as a card
   // standing up from it, so a tree whose trunk is just off the paving still

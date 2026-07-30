@@ -151,6 +151,10 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
   // are not an independent layer: they are only drawn where they cut through
   // vegetation, so everything above moves them. See `world/roads.ts`.
   bio.add(params.render, 'roads').name('roads').onChange(refresh)
+  // Debug: the links the router intended, over the top of everything. Most of
+  // what it decides is invisible by design, so this is the only way to tell a
+  // link that failed from one that paved nothing on purpose.
+  bio.add(params.render, 'roadDebug').name('· show road links').onChange(refresh)
 
   // --- Fog of war ---
   // Unexplored ground is not drawn at all, which is also the renderer's

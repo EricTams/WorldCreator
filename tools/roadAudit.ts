@@ -22,7 +22,7 @@
  */
 import { buildBiomeField, BIOMES, sampleBiomeAt } from '../src/world/biome'
 import { capitalClearing, makeStandField } from '../src/world/sites'
-import { ROAD_CELL, buildRoadNetwork } from '../src/world/roads'
+import { ROAD_CELL, ROUTE_CELL, buildRoadNetwork } from '../src/world/roads'
 import { ROAD_MATERIALS } from '../src/assets/roads'
 import { buildBoard } from './board'
 
@@ -58,15 +58,36 @@ for (const seed of seeds) {
     byMaterial[c - 1]++
   }
 
-  // Path length in world units, and where each path's midpoint fell. A path is
-  // the run of cells actually paved, so its length is the length of the cut.
-  const lengths = net.paths.map((p) => p.length * ROAD_CELL * 2)
+  // A "cut" is a contiguous paved run within one route, not a whole route: a
+  // route commonly crosses two woods with a field between them, and counting
+  // that as one cut would report a mean length twice what is actually drawn.
+  const cuts: { length: number; x: number; z: number }[] = []
+  let failed = 0
+  let routedLength = 0
+  for (const r of net.routes) {
+    if (r.points.length === 0) {
+      failed++
+      continue
+    }
+    routedLength += (r.points.length - 1) * ROUTE_CELL
+    let run: { x: number; z: number }[] = []
+    for (let i = 0; i <= r.points.length; i++) {
+      if (i < r.points.length && r.paved[i]) {
+        run.push(r.points[i])
+        continue
+      }
+      if (run.length > 1) {
+        const mid = run[run.length >> 1]
+        cuts.push({ length: (run.length - 1) * ROUTE_CELL, x: mid.x, z: mid.z })
+      }
+      run = []
+    }
+  }
+
+  const lengths = cuts.map((c) => c.length)
   const total = lengths.reduce((a, b) => a + b, 0)
   const perBiome = BIOMES.map(() => 0)
-  for (let i = 0; i < net.paths.length; i++) {
-    const mid = net.paths[i][net.paths[i].length >> 1]
-    if (mid) perBiome[sampleBiomeAt(field, mid.x, mid.z).a] += lengths[i]
-  }
+  for (const c of cuts) perBiome[sampleBiomeAt(field, c.x, c.z).a] += c.length
 
   console.log(`\n=== ${seed} ===`)
   console.log(
@@ -74,8 +95,12 @@ for (const seed of seeds) {
       `(${((paved * ROAD_CELL * ROAD_CELL) / 1000).toFixed(0)}k u²)`,
   )
   console.log(
-    `  ${net.paths.length} cuts, ${total.toFixed(0)}u total, ` +
-      `${net.paths.length ? (total / net.paths.length).toFixed(0) : 0}u mean, ` +
+    `  ${net.routes.length} links routed (${failed} unroutable), ` +
+      `${routedLength.toFixed(0)}u of route, ${((total / Math.max(1, routedLength)) * 100).toFixed(0)}% of it paved`,
+  )
+  console.log(
+    `  ${cuts.length} cuts, ${total.toFixed(0)}u total, ` +
+      `${cuts.length ? (total / cuts.length).toFixed(0) : 0}u mean, ` +
       `${lengths.length ? Math.min(...lengths).toFixed(0) : 0}u shortest`,
   )
   console.log(

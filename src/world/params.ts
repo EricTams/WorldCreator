@@ -201,6 +201,15 @@ export interface RenderParams {
    * the paving clear. See `world/roads.ts`.
    */
   roads: boolean
+  /**
+   * Draw the road network's intended links over the top of everything.
+   *
+   * A debug instrument, not a look setting. Most of what the router decides is
+   * invisible on purpose — a route is paved only where it cuts through
+   * vegetation — so this is the only way to tell a link that failed from a link
+   * that succeeded and correctly paved nothing. See `render/roadDebug.ts`.
+   */
+  roadDebug: boolean
   /** World units between scatter candidates. Lower is denser and costlier. */
   scatterSpacing: number
   /** World units across a typical stand of vegetation. */
@@ -430,6 +439,7 @@ export function defaultParams(): WorldParams {
       coastBand: 9,
       scatter: true,
       roads: true,
+      roadDebug: false,
       // A 2 m lattice, halved again by the diagonal checkerboard.
       //
       // Ground cover depends on the *ratio* of prop width to spacing, not on
