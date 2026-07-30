@@ -172,6 +172,26 @@ export interface Biome {
    * in it read as different places even in grey-scale.
    */
   density: number
+  /**
+   * How wide this territory's stands are, as a multiple of `scatterBlob`.
+   *
+   * `density` says how much of the territory is wooded; this says whether that
+   * cover arrives as a few great masses or as many copses. They are independent,
+   * and conflating them is what one global blob scale did: at 170 units for
+   * everybody, the two territories with the most cover had their stands overlap
+   * until the gaps closed, so the Meadowlands and the Wildwood came out as one
+   * continuous wood with a ragged outside edge and no interior edges at all.
+   * Coverage was right and the shape was wrong, which no amount of `density`
+   * could fix — lowering it thins the canopy everywhere rather than breaking the
+   * mass up.
+   *
+   * So the rule is: the more a territory grows, the smaller its stands want to
+   * be, because a stand only reads as one when there is something between it and
+   * the next. The barren territories go the other way — with cover this sparse,
+   * small stands scatter into single props and the territory loses the little
+   * structure it has, so their few stands are made wide enough to find.
+   */
+  standScale: number
 }
 
 /**
@@ -212,6 +232,10 @@ export const BIOMES: readonly Biome[] = [
     litter: [0, 2, 3, 6],
     litterShare: 0.22,
     density: 0.52,
+    // Copses in pasture. Half the default, because at the default this
+    // territory's woods touched and the pasture between them closed up — and
+    // open ground with woods standing in it is the whole subject of a meadow.
+    standScale: 0.4,
   },
   {
     id: 'wildwood',
@@ -248,6 +272,11 @@ export const BIOMES: readonly Biome[] = [
     litter: [1, 4, 5],
     litterShare: 0.08,
     density: 0.68,
+    // The smallest stands on the map, because this territory has the most cover
+    // and therefore the least room to show an edge. Thickets and the wet gaps
+    // between them: at 0.68 cover the gaps are already the minority, and they
+    // have to be numerous or the swamp is just a green fill.
+    standScale: 0.32,
   },
   {
     id: 'highland',
@@ -276,6 +305,9 @@ export const BIOMES: readonly Biome[] = [
     litter: [0, 5, 7],
     litterShare: 0.3,
     density: 0.38,
+    // Not far off the default. At 0.38 cover the stands already have gaps to sit
+    // in, so there is nothing to break up.
+    standScale: 0.85,
   },
   {
     id: 'blight',
@@ -312,6 +344,9 @@ export const BIOMES: readonly Biome[] = [
     litter: [1, 5, 6],
     litterShare: 0.28,
     density: 0.3,
+    // Wide and few. Dead ground wants its standing timber gathered into stands
+    // you can name rather than sprinkled evenly at low odds.
+    standScale: 1.15,
   },
   {
     id: 'ashland',
@@ -336,12 +371,44 @@ export const BIOMES: readonly Biome[] = [
     // Bleached dead trees, red coral, and the sheet's volcano — the one peak in
     // the pack with lava at the top, which is worth a heavier weighting than the
     // other territories give their mountains.
-    canopy: [0, 0, 1, 2, 3],
+    //
+    // Plus the two props in the pack that are fire rather than vegetation. They
+    // were drawn for exactly this territory and no biome was scattering them:
+    // the Ashlands' own ramp comment notes that its red is supposed to come from
+    // lava and fire props rather than from the ground, and then nothing put any
+    // on the ground. A spout and an open flame are also the only things here
+    // that are *not* dead, which is what stops the territory reading as a grey
+    // field with sticks in it.
+    canopy: [0, 0, 1, 2, 3, 'deco.lavaSpout', 'deco.lavaSpout', 'deco.flame'],
     relief: 'mount.lava',
-    reliefShare: 0.14,
-    litter: [0, 5, 6],
-    litterShare: 0.5,
-    density: 0.16,
+    // Trimmed from 0.14. The volcano was carrying the territory when there was
+    // nothing else to look at; now that there is, it can go back to being the
+    // landmark rather than the ground cover.
+    reliefShare: 0.11,
+    litter: [0, 2, 5, 6],
+    // Down from 0.5. Half of everything scattered here being a pebble is what
+    // made the extra cover invisible at any distance — litter is small, so it
+    // reads as texture on the ground rather than as things standing on it.
+    litterShare: 0.32,
+    // Up from 0.16. That was not "sparse", it was empty — measured over two
+    // seeds it scattered 0.5 props per 1000 u², against 9 in the Blight and 25
+    // in the Highland. About two hundred things in a whole territory.
+    //
+    // The reason it was so much worse than the number looks is that `density`
+    // is a percentile on a near-normal noise field, not a fraction of points
+    // kept, so it falls off a cliff in the tail rather than in proportion.
+    // Measured on this territory: 0.24 gives 4 per 1000, 0.28 gives 9, 0.32
+    // gives 15, 0.36 gives 23. Nearly a factor of six across a range that reads
+    // as if it should be a factor of one and a half.
+    //
+    // 0.28 is sixteen times what was there and still the lowest of the six —
+    // just under the Blight on its emptiest seed. The Ashlands should be the
+    // place where the least grows, not the place where nothing does.
+    density: 0.28,
+    // Wide stands, for the same reason the Blight has them: at this little
+    // cover, small stands break up into lone props and the territory stops
+    // having any structure to read at all.
+    standScale: 1.1,
   },
   {
     id: 'frostmark',
@@ -373,6 +440,9 @@ export const BIOMES: readonly Biome[] = [
     litter: [0, 5, 7],
     litterShare: 0.32,
     density: 0.32,
+    // Snowfields with treelines in them. Near the default — at 0.32 cover the
+    // stands already stand apart.
+    standScale: 0.95,
   },
 ]
 

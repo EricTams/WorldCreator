@@ -12,10 +12,13 @@
     "make-icon": "node tools/makeIcon.mjs",
     "pack-sprites": "node tools/packSprites.mjs",
     "pack-ground": "node tools/packGround.mjs",
+    "pack-roads": "node tools/packRoads.mjs",
     "survey-art": "node tools/surveyArt.mjs",
     "audit-biomes": "rolldown tools/biomeAudit.ts -o node_modules/.cache/biomeAudit.mjs --platform node --format esm && node node_modules/.cache/biomeAudit.mjs",
     "audit-placement": "rolldown tools/placementAudit.ts -o node_modules/.cache/placementAudit.mjs --platform node --format esm && node node_modules/.cache/placementAudit.mjs",
     "match": "rolldown tools/matchHarness.ts -o node_modules/.cache/matchHarness.mjs --platform node --format esm && node node_modules/.cache/matchHarness.mjs",
+    "audit-scatter": "rolldown tools/scatterAudit.ts -o node_modules/.cache/scatterAudit.mjs --platform node --format esm && node node_modules/.cache/scatterAudit.mjs",
+    "audit-roads": "rolldown tools/roadAudit.ts -o node_modules/.cache/roadAudit.mjs --platform node --format esm && node node_modules/.cache/roadAudit.mjs",
     "check-nodes": "rolldown tools/nodeCheck.ts -o node_modules/.cache/nodeCheck.mjs --platform node --format esm && node node_modules/.cache/nodeCheck.mjs"
   },
   "dependencies": {

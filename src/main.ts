@@ -43,12 +43,16 @@ import {
   VILLAGE_OUTER,
   capitalClearing,
   flattenSitePads,
+  makeStandField,
   ringDecorations,
   scatterDecorations,
   settlementLayout,
   siteClearing,
 } from './world/sites'
 import type { DecoSpot, SitePad } from './world/sites'
+import { buildRoadNetwork, roadAt } from './world/roads'
+import type { RoadNetwork } from './world/roads'
+import { RoadLayer } from './render/roadLayer'
 import { terrainHeightAt } from './world/terrainQuery'
 import { randomSeed } from './world/prng'
 import type { WorkerRequest, WorkerResponse } from './world/protocol'
@@ -113,6 +117,17 @@ const atlas = loadSpriteAtlas(scene.renderer.capabilities.getMaxAnisotropy())
 const CARD_CAPACITY = 180000
 const cards = new CardLayer({ atlas, capacity: CARD_CAPACITY })
 scene.scene.add(cards.object)
+
+const roads = new RoadLayer(scene.renderer.capabilities.getMaxAnisotropy())
+scene.scene.add(roads.object)
+/**
+ * Where the roads went, kept because the scatter has to agree with it.
+ *
+ * A road is a cut through the vegetation, so it is not enough for the road to
+ * be drawn on top — the trees have to be absent from underneath it. The network
+ * is therefore built before the cards and consulted while they are scattered.
+ */
+let roadNet: RoadNetwork | null = null
 
 /**
  * The live half of the board.
@@ -729,30 +744,51 @@ function buildCards(): void {
     ...plan.plazas.map((p) => ({ ...p, radius: p.radius * 1.08 })),
   ].filter((pad) => pad.radius > 0)
 
+  // Roads before decoration, because they decide some of it. The network is
+  // only drawn where it cuts through vegetation, which means it is laid out
+  // against the same stand field the scatter is about to threshold — build it
+  // once here and hand it to both, or the road appears in bare fields and the
+  // trees grow back over the paving.
+  const roadTerrain = {
+    hm: current,
+    cellSize: effectiveCellSize(),
+    heightScale: params.render.heightScale,
+    seaLevel: params.shape.seaLevel,
+  }
+  const stands = makeStandField(field, params.seed, params.render.scatterBlob)
+  roadNet = params.render.roads
+    ? buildRoadNetwork(roadTerrain, plan.game.sites, field, stands, {
+        worldSize: (current.size - 1) * effectiveCellSize(),
+        plazaRadius: capitalClearing(),
+      })
+    : null
+  roads.build(roadNet, frame)
+
+  // The verge, not the kerb. A prop is placed by its foot but drawn as a card
+  // standing up from it, so a tree whose trunk is just off the paving still
+  // hangs its canopy across the road. Half a tree's width of margin is what
+  // makes the cut read as a cut from above.
+  const net = roadNet
+  const onRoad = net ? (x: number, z: number) => roadAt(net, x, z, treeWidth * 0.5) : undefined
+
   // Rings first: a site's own clearing gets a denser fringe than open country.
   // Then dress the rest of the island, keeping clear of those clearings.
   const seaY = params.shape.seaLevel * params.render.heightScale
   const rings = ringDecorations(clearings, params.seed, field, {
     spacing: treeWidth * 1.35,
-  }).filter((spot) => terrainHeightAt(frame, spot.x, spot.z) > seaY + 1)
+  }).filter(
+    (spot) =>
+      terrainHeightAt(frame, spot.x, spot.z) > seaY + 1 && !onRoad?.(spot.x, spot.z),
+  )
 
   const scatter = params.render.scatter
-    ? scatterDecorations(
-        {
-          hm: current,
-          cellSize: effectiveCellSize(),
-          heightScale: params.render.heightScale,
-          seaLevel: params.shape.seaLevel,
-        },
-        field,
-        params.seed,
-        {
-          spacing: params.render.scatterSpacing,
-          blobScale: params.render.scatterBlob,
-          avoid: clearings,
-          maxCount: CARD_CAPACITY - sites.length - rings.length,
-        },
-      )
+    ? scatterDecorations(roadTerrain, field, params.seed, {
+        spacing: params.render.scatterSpacing,
+        blobScale: params.render.scatterBlob,
+        avoid: clearings,
+        maxCount: CARD_CAPACITY - sites.length - rings.length,
+        onRoad,
+      })
     : []
 
   cards.set([...sites, ...decorationCards(rings), ...decorationCards(scatter)], frame)
@@ -886,6 +922,7 @@ function applyFog(): void {
   const on = params.fog.enabled && !params.fog.revealAll
   fogTexture.sync(fogGrid)
   terrain.setFog(fogTexture.texture, worldSize, on)
+  roads.setFog(fogTexture.texture, worldSize, on)
   terrain.cullByFog(on ? (x0, z0, x1, z1) => fogGrid.maxExploredIn(x0, z0, x1, z1) : null)
   const frame = terrainFrame()
   if (frame) cards.cullByFog(on ? (x, z) => fogGrid.exploredAt(x, z) : null, frame)

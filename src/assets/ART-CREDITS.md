@@ -8,6 +8,12 @@ faction creature sets. `src/assets/sprites.png` is a curated subset of them,
 packed into a single atlas by `tools/packSprites.mjs`; the source packs
 themselves are not redistributed here.
 
+`src/assets/roads.png` is the one exception to "curated subset": it is the
+*HAS Overworld* universal road tileset shipped as the artist drew it, because
+its four road materials are already a tidy grid and rearranging them would only
+lose the layout. `tools/packRoads.mjs` copies it and generates the autotile
+lookup beside it.
+
 The licence and the artist's own thanks to his patrons follow verbatim.
 
 ---

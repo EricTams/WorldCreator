@@ -193,6 +193,14 @@ export interface RenderParams {
   coastBand: number
   /** Dress the whole island with biome-appropriate props, not just the sites. */
   scatter: boolean
+  /**
+   * Lay roads between neighbouring places, and cut the vegetation for them.
+   *
+   * A look toggle rather than a terrain one — roads change nothing the
+   * simulation reads — but it does move props, because the scatter has to leave
+   * the paving clear. See `world/roads.ts`.
+   */
+  roads: boolean
   /** World units between scatter candidates. Lower is denser and costlier. */
   scatterSpacing: number
   /** World units across a typical stand of vegetation. */
@@ -421,6 +429,7 @@ export function defaultParams(): WorldParams {
       coastStep: 3,
       coastBand: 9,
       scatter: true,
+      roads: true,
       // A 2 m lattice, halved again by the diagonal checkerboard.
       //
       // Ground cover depends on the *ratio* of prop width to spacing, not on

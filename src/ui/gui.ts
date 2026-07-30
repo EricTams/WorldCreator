@@ -147,6 +147,10 @@ export function buildGui(params: WorldParams, cb: GuiCallbacks): GuiHandles {
     .add(params.render, 'scatterBlob', 40, 500, 10)
     .name('stand size (m)')
     .onChange(refresh)
+  // Roads sit under scatter rather than in a folder of their own because they
+  // are not an independent layer: they are only drawn where they cut through
+  // vegetation, so everything above moves them. See `world/roads.ts`.
+  bio.add(params.render, 'roads').name('roads').onChange(refresh)
 
   // --- Fog of war ---
   // Unexplored ground is not drawn at all, which is also the renderer's

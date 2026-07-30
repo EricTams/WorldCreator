@@ -78,9 +78,78 @@ function spriteFor(field: BiomeField | null, x: number, z: number, r: number): s
   return typeof c === 'number' ? `tree.${b.ground}.${c}` : c
 }
 
-/** How much this territory grows, 0..1. */
-function densityFor(field: BiomeField | null, x: number, z: number): number {
-  return field ? BIOMES[sampleBiomeAt(field, x, z).a].density : 0.5
+/**
+ * How much this territory grows, and how wide it gathers it into stands.
+ *
+ * One lookup for both, because they are read together at every candidate and
+ * `sampleBiomeAt` is the expensive half of the inner loop.
+ */
+function coverFor(
+  field: BiomeField | null,
+  x: number,
+  z: number,
+): { density: number; standScale: number } {
+  if (!field) return { density: 0.5, standScale: 1 }
+  const b = BIOMES[sampleBiomeAt(field, x, z).a]
+  return { density: b.density, standScale: b.standScale }
+}
+
+/**
+ * Where the island's vegetation is, as a field you can ask about a point.
+ *
+ * Pulled out of the scatter because a second caller needed the same answer and
+ * the alternative was two implementations of it. Roads are only drawn where
+ * they cut through something — open ground reads as passable without help, so a
+ * road across it is pixels spent saying nothing — which means the road layer has
+ * to agree with the scatter about where "something" is, exactly, or the road
+ * appears in bare fields and stops short of the treeline.
+ *
+ * `depth` is how far inside a stand a point is: positive inside, negative out,
+ * and it is a real distance-like quantity rather than a boolean because the road
+ * wants to know *how* wooded, not just whether. It is the territory's cover
+ * minus the stand noise, so it runs to about +0.5 in the thick of a wildwood and
+ * to -0.5 out in an ashland.
+ */
+export interface StandField {
+  depth(x: number, z: number): number
+  inside(x: number, z: number): boolean
+  /**
+   * How much the territory at this point grows at all, 0..1 — its `density`.
+   *
+   * Exposed because `depth` alone is not comparable between territories. The
+   * same depth means "the thick of the wood" in an Ashland and "a thin patch"
+   * in a Wildwood, so anything asking "is this properly wooded" has to ask
+   * relative to what this territory considers wooded. Without it, a single
+   * absolute threshold silently excludes every sparse territory.
+   */
+  cover(x: number, z: number): number
+}
+
+/**
+ * Build the stand field for a seed.
+ *
+ * Takes its own `makeRng(seed, 'scatterBlob')` stream, the same one the scatter
+ * used when this lived inside it, so building one does not shift any other
+ * random draw and the same seed still grows the same island.
+ */
+export function makeStandField(
+  field: BiomeField | null,
+  seed: string,
+  blobScale: number,
+): StandField {
+  const blob = makeNoise2D(makeRng(seed, 'scatterBlob'))
+  const base = Math.max(8, blobScale)
+  const depth = (x: number, z: number): number => {
+    const { density, standScale } = coverFor(field, x, z)
+    const freq = 1 / Math.max(8, base * standScale)
+    const b = (fbm(blob, x * freq, z * freq, 3, 1, 2.1, 0.55) + 1) * 0.5
+    return density - b
+  }
+  return {
+    depth,
+    inside: (x, z) => depth(x, z) > 0,
+    cover: (x, z) => coverFor(field, x, z).density,
+  }
 }
 
 /**
@@ -106,6 +175,12 @@ export function scatterDecorations(
     maxCount: number
     /** World units across a typical stand of vegetation. */
     blobScale: number
+    /**
+     * Where the roads went. Nothing is scattered on one — a road is a cut
+     * through the vegetation, so the vegetation has to actually be absent from
+     * it, not merely thinner.
+     */
+    onRoad?: (x: number, z: number) => boolean
   },
 ): DecoSpot[] {
   const { hm, cellSize, heightScale, seaLevel } = terrain
@@ -124,8 +199,18 @@ export function scatterDecorations(
   // produced. Layering breaks the level set into ragged patches of varied size
   // with real gaps between them, and it is the ragged *edge* that makes a wood
   // look like a place rather than a fill pattern.
-  const blob = makeNoise2D(makeRng(seed, 'scatterBlob'))
-  const blobFreq = 1 / Math.max(8, opts.blobScale)
+  //
+  // Frequency is per-territory, not per-map: `opts.blobScale` is the width of a
+  // default stand and each territory scales it (see `Biome.standScale`). Sampled
+  // at the candidate rather than fixed for the whole field, so the noise a point
+  // is thresholded against is the noise of the territory that point is in.
+  //
+  // That does mean the field's frequency changes across a border, and so the
+  // stand pattern does not carry over one. Which is right: a border here is
+  // already a hard cut — the ground tile, the colour ramp and the cover all
+  // change on the same line — and a wood that ran across it at one grain would
+  // be the thing that looked wrong.
+  const stands = makeStandField(field, seed, opts.blobScale)
 
   let ix = 0
   let iz = 0
@@ -167,15 +252,18 @@ export function scatterDecorations(
       const slope = 1 - 1 / Math.sqrt(1 + dx * dx + dz * dz)
       if (slope > 0.55) continue
 
-      // Inside a stand or out in the open? `density` is the fraction of the
-      // territory its vegetation covers, so a wildwood is nearly closed canopy
-      // and an ashland is a few things clinging on.
-      const cover = densityFor(field, px, pz)
-      const b = (fbm(blob, px * blobFreq, pz * blobFreq, 3, 1, 2.1, 0.55) + 1) * 0.5
+      // Inside a stand or out in the open? `depth` is the territory's cover
+      // less the stand noise, so a wildwood is nearly closed canopy and an
+      // ashland is a few things clinging on.
+      //
       // Only a whisper of per-point jitter. More than this and the stand's edge
       // dissolves into the same even scatter the octaves were added to avoid;
       // this is just enough that the treeline is not a drawn contour.
-      if (b + (keep - 0.5) * 0.1 > cover) continue
+      if (stands.depth(px, pz) < (keep - 0.5) * 0.1) continue
+
+      // Not on the road. This is the cut: the road was laid exactly where the
+      // vegetation would have been, so it has to actually clear it.
+      if (opts.onRoad?.(px, pz)) continue
 
       // Keep clear of the levelled site pads — a building wants its clearing.
       let blocked = false
