@@ -669,9 +669,19 @@ export interface BiomeSample {
    * the gap exceeds `blend` and so says only "not near a border", not how far.
    */
   gap: number
+  /**
+   * Index into `field.seeds` of the nearest capital — which *territory* owns
+   * this point, as opposed to which biome is painted on it. Two capitals can
+   * share a biome, so `a` cannot answer this.
+   *
+   * Exposed because the biome audit was recomputing it: it kept its own copy of
+   * the warp and the nearest-seed search, and a duplicate of a search is a
+   * search that can disagree with the one the game runs.
+   */
+  seed: number
 }
 
-const sample: BiomeSample = { a: 0, b: 0, t: 0, gap: 0 }
+const sample: BiomeSample = { a: 0, b: 0, t: 0, gap: 0, seed: -1 }
 
 /**
  * Which territory owns a world position.
@@ -687,6 +697,7 @@ export function sampleBiomeAt(field: BiomeField, worldX: number, worldZ: number)
     sample.b = 0
     sample.t = 0
     sample.gap = Infinity
+    sample.seed = -1
     return sample
   }
 
@@ -733,6 +744,7 @@ export function sampleBiomeAt(field: BiomeField, worldX: number, worldZ: number)
   const t = gap >= field.blend ? 0 : 0.5 * (1 - gap / field.blend)
   sample.t = t
   sample.gap = gap
+  sample.seed = i0
   return sample
 }
 

@@ -14,11 +14,18 @@
  *   - Voronoi cells varying eight-fold in area, because nothing measured them
  *   - same-faction cells fusing, so fifteen territories rendered as six blobs
  *
- * So it runs the real pipeline headlessly — `generateHeightmap`, `placeCities`,
- * `buildBiomeField`, all with the shipped defaults — rasterises the result, and
- * prints the numbers plus an ASCII map with the capitals marked. It imports the
- * same modules the game does rather than reimplementing the sampling, so it
- * cannot drift from what the player sees.
+ * So it builds a board through `tools/board.ts` — which is `world/build.ts`,
+ * the function `main.ts` itself calls — rasterises the result, and prints the
+ * numbers plus an ASCII map with the capitals marked.
+ *
+ * This header used to claim the audit "imports the same modules the game does
+ * rather than reimplementing the sampling, so it cannot drift from what the
+ * player sees." Both halves of that were false. It kept a private copy of the
+ * warp and nearest-seed search, and the board it measured had been eroded and
+ * amplified when the game does neither. Sampling now goes through
+ * `sampleBiomeAt`, and the board through the one builder, so the claim is worth
+ * something — but it was worth nothing for as long as it went unchecked, which
+ * is why `tools/` is in `npm run typecheck` now.
  *
  * The three numbers worth watching:
  *
@@ -74,22 +81,14 @@ for (const seedName of seeds) {
         continue
       }
       land++
-      // nearest seed with the same warp sampleBiomeAt uses, detail octave included
-      const wx = x * field.warpScale
-      const wz = z * field.warpScale
-      const dx = x * field.detailScale
-      const dz = z * field.detailScale
-      const px = x + field.warpX(wx, wz) * field.warpAmount + field.warpX(dx, dz) * field.detailAmount
-      const pz = z + field.warpZ(wx, wz) * field.warpAmount + field.warpZ(dx, dz) * field.detailAmount
-      let best = -1
-      let bd = Infinity
-      for (let k = 0; k < field.seeds.length; k++) {
-        const d = Math.hypot(field.seeds[k].x - px, field.seeds[k].z - pz)
-        if (d < bd) { bd = d; best = k }
-      }
-      ownerCity[j * N + i] = best
-      cityArea[best] += cellArea
+      // One call answers both questions. This used to be two: a hand-rolled
+      // copy of the warp and the nearest-seed search for the territory, and the
+      // real `sampleBiomeAt` for the biome — so the audit's idea of who owned a
+      // cell could drift from the game's while its idea of what grew there could
+      // not, and nothing would have shown that they had parted company.
       const s = sampleBiomeAt(field, x, z)
+      ownerCity[j * N + i] = s.seed
+      cityArea[s.seed] += cellArea
       const b = s.t > 0.5 ? s.b : s.a
       factionArea[b] += cellArea
       row += 'ABCDEF'[b]

@@ -18,8 +18,13 @@ import type { BuildItem } from './game/rules'
 import { Hud, SPELLS } from './ui/hud'
 import { Menu } from './ui/menu'
 import { FACTIONS } from './game/factions'
-import { planGameMap, planPoints } from './world/gameMap'
-import type { MapPlan } from './world/gameMap'
+import {
+  coastShelf as coastShelfFor,
+  planWorld as planWorldCore,
+  terrainFrameFor,
+  worldCellSize,
+} from './world/build'
+import type { WorldPlan as CoreWorldPlan } from './world/build'
 import { raycastTerrain } from './game/raycast'
 import { TerrainMesh } from './render/terrainMesh'
 import type { TerrainFrame } from './world/terrainQuery'
@@ -32,24 +37,17 @@ import { buildGui } from './ui/gui'
 import { Heightmap } from './world/heightmap'
 import { defaultParams } from './world/params'
 import { BIOMES, buildBiomeField } from './world/biome'
-import type { BiomeField } from './world/biome'
-import { placeCities } from './world/cities'
-import type { City } from './world/cities'
 import { FogGrid } from './world/fog'
 import { FogTexture } from './render/fogTexture'
 import { FogOfWar } from './game/fogOfWar'
 import {
-  VILLAGE_INNER,
-  VILLAGE_OUTER,
   capitalClearing,
   flattenSitePads,
   makeStandField,
   ringDecorations,
   scatterDecorations,
-  settlementLayout,
-  siteClearing,
 } from './world/sites'
-import type { DecoSpot, SitePad } from './world/sites'
+import type { DecoSpot } from './world/sites'
 import { buildRoadNetwork, roadAt } from './world/roads'
 import type { RoadNetwork } from './world/roads'
 import { RoadLayer } from './render/roadLayer'
@@ -255,7 +253,7 @@ function startMatch(asAttract: boolean): void {
   // not yank you out of whatever you were inspecting — so starting a match is
   // the one case that asks for the framing back.
   reframeOnNextBuild = true
-  regenerate()
+  regenerate(true)
 }
 
 /** Leave the match on screen and put the main menu over it. */
@@ -284,21 +282,13 @@ const menu = new Menu(document.body, {
  * are applied — otherwise amplifying would silently quadruple the world.
  */
 function effectiveCellSize(): number {
-  const worldWidth = params.mapSize * params.render.cellSize
-  const cells = current ? current.size - 1 : params.mapSize
-  return worldWidth / Math.max(1, cells)
+  return worldCellSize(params, current ? current.size : params.mapSize + 1)
 }
 
 /** Everything the avatar needs to sit on the current terrain. */
 function terrainFrame(): TerrainFrame | null {
   if (!current) return null
-  return {
-    heightmap: current,
-    cellSize: effectiveCellSize(),
-    heightScale: params.render.heightScale,
-    seaLevel: params.shape.seaLevel,
-    ...coastShelf(),
-  }
+  return terrainFrameFor(params, current)
 }
 
 /**
@@ -307,14 +297,11 @@ function terrainFrame(): TerrainFrame | null {
  *
  * One function, because the mesh and every height query have to be shaping the
  * ground identically — a shelf under the terrain but not under the avatar puts
- * it knee-deep in its own beach.
+ * it knee-deep in its own beach. It lives in `world/build.ts` so the headless
+ * callers get the same shelf; this is the reader that already has `params`.
  */
 function coastShelf(): { shelfRise: number; shelfBand: number } {
-  const scale = Math.max(1e-5, params.render.heightScale)
-  return {
-    shelfRise: params.render.coastStep / scale,
-    shelfBand: params.render.coastBand / scale,
-  }
+  return coastShelfFor(params)
 }
 
 function syncAvatarVisibility(): void {
@@ -389,6 +376,13 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
   if (msg.type === 'error') {
     erosionBusy = false
     gui.setErosionBusy(false)
+    // A failed refine leaves an island nothing was ever sited on. Seat the world
+    // on the raw heights rather than leaving the map empty and the flag armed
+    // for whatever the next build turns out to be.
+    if (refineOnBuild) {
+      refineOnBuild = false
+      if (current) seatNewIsland()
+    }
     statusEl.textContent = `error: ${msg.message}`
     console.error('[worker]', msg.message)
     return
@@ -409,16 +403,20 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     fogGrid.setWorld(params.mapSize * params.render.cellSize)
     fogGrid.reset()
     fogOfWar.invalidate()
-    cutSitePads()
-    rebuildMesh(true)
-    // Open on the avatar rather than the overview — the close third-person
-    // framing is the default view now. Only on the very first build, so later
-    // regenerates don't yank you back out of whatever you were looking at.
-    if (!openedOnAvatar || reframeOnNextBuild) {
-      openedOnAvatar = true
-      reframeOnNextBuild = false
-      if (params.avatar.enabled) rig.apply('follow', params.camera)
+
+    if (refineOnBuild && willRefine()) {
+      // The island is not finished, so do not plan a world on it. Cities scored
+      // against raw heights land in different places than cities scored against
+      // eroded ones — that is the whole reason this refine exists — so planning
+      // now would seat a village, restart the sim, and throw both away a third
+      // of a second later. Show the ground and wait.
+      rebuildMesh(false)
+      runErosion()
+      updateStatus()
+      return
     }
+
+    seatNewIsland()
   } else {
     stats.erodeMs = msg.erodeMs
     stats.amplifyMs = msg.amplifyMs
@@ -428,33 +426,94 @@ worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     erosionBusy = false
     gui.setErosionBusy(false)
     current = new Heightmap(msg.size, heights)
-    // Erosion recarves the valleys and amplification refines the grid, so the
-    // pads have to be cut again — they were levelled into a surface that no
-    // longer exists.
-    cutSitePads()
-    // Amplification changes the grid resolution, so the camera limits, water
-    // and avatar footing all need re-deriving — but not the framing.
-    rebuildMesh(false)
+
+    if (refineOnBuild) {
+      // This refine *was* the island's construction, so the new-map ceremony
+      // happens here rather than after `generate` — including seating the avatar
+      // at its capital, which only exists now.
+      refineOnBuild = false
+      seatNewIsland()
+    } else {
+      // A refine of an island already in play. Erosion recarves the valleys and
+      // amplification refines the grid, so the pads have to be cut again — they
+      // were levelled into a surface that no longer exists.
+      cutSitePads()
+      // Amplification changes the grid resolution, so the camera limits, water
+      // and avatar footing all need re-deriving — but not the framing.
+      rebuildMesh(false)
+    }
   }
   updateStatus()
+}
+
+/**
+ * Site the world on a finished island and point the camera at it.
+ *
+ * Called from whichever worker phase *completes* the island: `generate` when the
+ * map is being previewed raw, `refine` when it is being built to be played on.
+ * Keeping it in one function is what stops the two paths from drifting into
+ * seating the avatar in one and forgetting to in the other.
+ */
+function seatNewIsland(): void {
+  cutSitePads()
+  rebuildMesh(true)
+  // Open on the avatar rather than the overview — the close third-person
+  // framing is the default view now. Only on the very first build, so later
+  // regenerates don't yank you back out of whatever you were looking at.
+  if (!openedOnAvatar || reframeOnNextBuild) {
+    openedOnAvatar = true
+    reframeOnNextBuild = false
+    if (params.avatar.enabled) rig.apply('follow', params.camera)
+  }
 }
 
 // --- actions ----------------------------------------------------------------
 
 let regenQueued = false
 
-/** Coalesce slider drags to at most one regeneration per frame. */
-function regenerate(): void {
+/**
+ * True when the pending `generate` is building an island to be *played* on, and
+ * so has to be finished with a refine before anything is sited on it.
+ */
+let refineOnBuild = false
+
+/** Whether a refine would actually change the ground, or is a no-op worth skipping. */
+function willRefine(): boolean {
+  return params.erosion.droplets > 0 || params.amplify.enabled
+}
+
+/**
+ * Build a new island.
+ *
+ * `forPlay` is the difference between a match and a preview, and it decides
+ * whether the island gets eroded and amplified before the capitals are sited on
+ * it. Every match does; a slider drag does not.
+ *
+ * Not because raw ground is good enough to play on — it is the wrong island, and
+ * siting on it is the bug this whole change exists to fix — but because
+ * `regenerate` is wired to `onChange` on two dozen terrain sliders. Refining
+ * each of those would put a third of a second of erosion and an 8.4M-triangle
+ * mesh rebuild inside every frame of a drag. So dragging shows you the raw shape
+ * moving under your hands, and the island is finished the moment a match starts.
+ */
+function regenerate(forPlay = false): void {
+  // Coalesced calls within one frame OR together, so a slider moved in the same
+  // frame a match starts cannot cancel the refine. The flag is then handed to
+  // the job that actually goes out, and the next job sets its own.
+  queuedForPlay = queuedForPlay || forPlay
   if (regenQueued) return
   regenQueued = true
   requestAnimationFrame(() => {
     regenQueued = false
+    refineOnBuild = queuedForPlay
+    queuedForPlay = false
     jobId++
     erosionBusy = false
     gui.setErosionBusy(false)
     post({ type: 'generate', jobId, params: structuredClone(params) })
   })
 }
+let queuedForPlay = false
 
 function runErosion(): void {
   if (!baseHeights || !current || erosionBusy) return
@@ -506,75 +565,27 @@ function revertErosion(): void {
  * ground in one place and put the town in another. `planWorld` runs once per new
  * heightmap, from `cutSitePads`.
  */
-interface WorldPlan {
-  cities: City[]
-  field: BiomeField | null
+interface WorldPlan extends CoreWorldPlan {
   /** Cities and their villages, in card order. */
   sites: CardSpec[]
-  /** The board: who owns which capital, and where the mines and points are. */
-  game: MapPlan
-  /**
-   * The levelled ground each village stands on, centred on its plaza.
-   *
-   * Not carried by the town card the way it used to be. A card's pad is centred
-   * on the card, and the town now stands on the rim of its own circle — hanging
-   * the terrace off it would level a disc pushed a full ring-radius north of the
-   * village and leave the southern houses on whatever slope was there. The
-   * clearing belongs to the settlement, so the settlement holds it.
-   */
-  plazas: SitePad[]
-  /**
-   * Capitals whose surroundings stay permanently on the map.
-   *
-   * The player's own, and only theirs. Feeding every city here would put all six
-   * territories on the map before the avatar had moved, which is the one thing
-   * fog of war exists to prevent. Rival capitals become permanent when there is
-   * something that tracks having found them.
-   */
-  owned: { x: number; z: number }[]
 }
 let plan: WorldPlan | null = null
 
 /**
- * Site the capitals and grow their settlements.
+ * Site the capitals and grow their settlements, then dress the result in cards.
  *
- * Order matters: cities are scored against the terrain as generated, and the
- * biome field is then seeded from where they landed, so a territory is the land
- * around its capital rather than a random disc that happens to contain one.
- * Flattening comes after — it only touches ground under pads chosen here.
+ * The siting itself is `world/build.ts` — the same function `tools/board.ts`
+ * calls, so what the audits measure and what you are looking at are the same
+ * island by construction rather than by two files agreeing to stay in step.
+ * Everything below the call is the renderer's half: which sprite a capital wears
+ * and what card sits where, none of which the headless side has an opinion on.
  */
 function planWorld(): WorldPlan | null {
   const frame = terrainFrame()
   if (!frame) return null
 
-  const townWidth = cards.spriteWidth('city.castle')
-  const clearing = capitalClearing()
-
-  // The five Points of Power are sited before anything else on the board. They
-  // make an X — four arms and a centre — and that figure is the map's fairness:
-  // when a point was instead hung off each capital, a wizard who drew a roomy
-  // start drew an easy victory condition with it. Cities are then told where
-  // the points went, because a capital cannot be moved once it has a village
-  // and a territory, so first refusal has to be given rather than taken.
-  const points = params.biome.enabled ? planPoints(params.seed, frame) : []
-  const cities = params.biome.enabled
-    ? placeCities(params.seed, frame, {
-        count: params.biome.cities,
-        clearing,
-        reserved: points.map((p) => ({ x: p.x, z: p.z, radius: p.radius + clearing })),
-      })
-    : []
-
-  const field = params.biome.enabled
-    ? buildBiomeField(
-        params.seed,
-        params.mapSize * params.render.cellSize,
-        params.biome,
-        cities,
-      )
-    : null
-
-  const game = planGameMap(params.seed, frame, cities, FACTIONS.length, points)
+  const core = planWorldCore(params, frame, FACTIONS.length)
+  const { cities, game, settlements } = core
 
   // A wizard's capital is drawn with its faction's own castle rather than with
   // its territory's, so the three seats of power are recognisable on sight.
@@ -585,12 +596,6 @@ function planWorld(): WorldPlan | null {
     if (site.kind !== 'city' || site.owner < 0 || site.cityIndex === undefined) continue
     capitalSprite.set(site.cityIndex, FACTIONS[site.owner].city)
   }
-
-  const settlements = settlementLayout(cities, params.seed, {
-    inner: townWidth * VILLAGE_INNER,
-    outer: townWidth * VILLAGE_OUTER,
-    townWidth,
-  })
 
   // Every card in a village stands on the village's terrace, so none of them cut
   // ground of their own or push the treeline outward: `padScale: 0` turns off
@@ -627,23 +632,7 @@ function planWorld(): WorldPlan | null {
     }
   }
 
-  // The plazas the villages stand on, plus one apiece for the mines, lairs and
-  // Points of Power. They are the same kind of thing — ground that has been
-  // levelled for something built on it — so they travel together and every
-  // consumer treats them alike.
-  // A capital gets its whole village ring levelled; everything else gets only
-  // the ground its own card stands on. `s.radius` is the defender leash, not a
-  // measure of the building, and terracing to it cut an 80-unit bald disc
-  // around a five-unit-wide lair.
-  const plazas: SitePad[] = cities.map((c) => ({ x: c.x, z: c.z, radius: clearing }))
-  for (const s of game.sites) {
-    if (s.sprite !== null) {
-      plazas.push({ x: s.x, z: s.z, radius: siteClearing(s.sprite as SpriteKey) })
-    }
-  }
-
-  const owned = cities.filter((c) => c.player).map((c) => ({ x: c.x, z: c.z }))
-  return { cities, field, sites, plazas, game, owned }
+  return { ...core, sites }
 }
 
 /**
@@ -982,6 +971,10 @@ function updateStatus(): void {
         ? 'amplifying…'
         : `eroding ${(stats.progress * 100).toFixed(0)}%`,
     )
+    // Say why the island is bare. Nothing is sited until the ground stops
+    // moving, so for these few hundred milliseconds there are deliberately no
+    // towns on the map and the reason should not look like a missing feature.
+    if (refineOnBuild) parts.push('building the island…')
   } else if (stats.eroded) {
     parts.push(`eroded ${(stats.erodeMs / 1000).toFixed(2)} s`)
     if (stats.amplifyMs > 0) {
@@ -1517,4 +1510,5 @@ scene.renderer.setAnimationLoop(() => {
   scene.renderer.render(scene.scene, rig.camera)
 })
 
-regenerate()
+// The first island is one you can play on, so it is built the whole way.
+regenerate(true)

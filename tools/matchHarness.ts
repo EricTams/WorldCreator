@@ -12,34 +12,28 @@
  * plainly that the retune it implies wants the *real generated island*. This is
  * that harness, in the tree, so the claim can be checked and re-checked.
  *
- * It runs the shipped simulation rather than a model of it. The board is built
- * by the same calls `main.ts` makes in the same order, and the match is stepped
- * by the same `Sim.update` the render loop drives. The only concession is
- * `allAi`, which hands faction 0 to `flyAi` as well. Everything a run reports —
- * how long the match took, when anybody reached tier 3, whether an engine ever
- * rolled — is therefore evidence about the game, not about the harness.
+ * It runs the shipped simulation rather than a model of it. The board comes
+ * from `world/build.ts`, which is the function `main.ts` itself calls, and the
+ * match is stepped by the same `Sim.update` the render loop drives. The only
+ * concession is `allAi`, which hands faction 0 to `flyAi` as well. Everything a
+ * run reports — how long the match took, when anybody reached tier 3, whether an
+ * engine ever rolled — is therefore evidence about the game, not about the
+ * harness.
+ *
+ * It did not used to be. This file kept a private copy of the board sequence
+ * that flattened every site to `s.radius` — the defender leash, twenty-four to
+ * forty-eight units — where the game terraces only the ground a building stands
+ * on, and it eroded and amplified an island the game never refines. Every run in
+ * `runs/*.jsonl` recorded before that copy was deleted was played on a board the
+ * game does not build.
  *
  * Determinism: the sim reads no clock and no global RNG, so a seed names a
  * match exactly. Two runs of the same seed produce the same numbers, which is
  * what makes a retune a diff rather than an argument.
- *
- * One honest difference from the game: scenery-card pads are not flattened
- * here, because choosing them is a renderer job. Units move in pure XZ and
- * ground height only reaches the wizard's hover and a projectile's impact test,
- * so nothing the harness measures depends on it — but it is a difference, and
- * it is printed in the banner rather than buried in a comment.
  */
 
-import { defaultParams } from '../src/world/params'
-import { generateHeightmap } from '../src/world/generate'
-import { erode } from '../src/world/erosion'
-import { amplify } from '../src/world/amplify'
-import { placeCities } from '../src/world/cities'
-import { planGameMap, planPoints } from '../src/world/gameMap'
-import { capitalClearing, flattenSitePads } from '../src/world/sites'
-import type { SitePad } from '../src/world/sites'
-import { makeRng } from '../src/world/prng'
-import type { TerrainFrame } from '../src/world/terrainQuery'
+import { buildBoard } from './board'
+import type { BoardStage } from './board'
 import { Sim } from '../src/game/sim'
 import { FACTIONS } from '../src/game/factions'
 import { MAX_TIER } from '../src/game/rules'
@@ -52,77 +46,30 @@ interface Args {
   cap: number
   /** Simulated seconds per step. */
   dt: number
-  /** Skip amplification: faster to iterate on, slightly different ground. */
-  rough: boolean
+  /**
+   * Which island to play on. `refine` is what every match gets and so is the
+   * default; `--rough` skips amplification to iterate faster, and `--generate`
+   * plays the raw preview, which no real match ever uses.
+   */
+  stage: BoardStage
   /** Append one JSON object per match here. */
   json: string | null
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { seeds: [], cap: 3600, dt: 0.1, rough: false, json: null }
+  const out: Args = { seeds: [], cap: 3600, dt: 0.1, stage: 'refine', json: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--seeds') out.seeds = argv[++i].split(',').map((s) => s.trim()).filter(Boolean)
     else if (a === '--cap') out.cap = Number(argv[++i])
     else if (a === '--dt') out.dt = Number(argv[++i])
-    else if (a === '--rough') out.rough = true
+    else if (a === '--rough') out.stage = 'rough'
+    else if (a === '--generate') out.stage = 'generate'
     else if (a === '--json') out.json = argv[++i]
     else if (!a.startsWith('--')) out.seeds.push(a)
   }
   if (out.seeds.length === 0) out.seeds = ['karomi', 'atlas', 'verdant', 'kestrel', 'orrery']
   return out
-}
-
-// --- the board ---------------------------------------------------------------
-
-/**
- * Build the island exactly as `main.ts` does.
- *
- * The order is the part that matters and it is not obvious: sites are scored
- * against the *refined* heights, so erosion and amplification have to happen
- * before `planGameMap`, and the pads are cut afterwards from what it chose.
- * Planning against the raw heightmap would put mines on slopes the real game
- * would have rejected, and the harness would be measuring a different island.
- */
-function buildBoard(seed: string, rough: boolean): { frame: TerrainFrame; plan: ReturnType<typeof planGameMap> } {
-  const params = defaultParams()
-  params.seed = seed
-
-  let hm = generateHeightmap(params)
-  if (params.erosion.droplets > 0) {
-    erode(hm, params.erosion, params.shape.seaLevel, makeRng(params.seed, 'erosion'))
-  }
-  if (params.amplify.enabled && !rough) {
-    hm = amplify(hm, params.amplify, params.seed).heightmap
-  }
-
-  const worldWidth = params.mapSize * params.render.cellSize
-  const scale = Math.max(1e-5, params.render.heightScale)
-  const frame: TerrainFrame = {
-    heightmap: hm,
-    cellSize: worldWidth / (hm.size - 1),
-    heightScale: params.render.heightScale,
-    seaLevel: params.shape.seaLevel,
-    // The coastal step, in the normalised heights the heightfield speaks —
-    // `main.ts` `coastShelf()`, which every height query has to agree with.
-    shelfRise: params.render.coastStep / scale,
-    shelfBand: params.render.coastBand / scale,
-  }
-
-  const clearing = capitalClearing()
-  const points = planPoints(params.seed, frame)
-  const cities = placeCities(params.seed, frame, {
-    count: params.biome.cities,
-    clearing,
-    reserved: points.map((p) => ({ x: p.x, z: p.z, radius: p.radius + clearing })),
-  })
-  const plan = planGameMap(params.seed, frame, cities, FACTIONS.length, points)
-
-  const plazas: SitePad[] = cities.map((c) => ({ x: c.x, z: c.z, radius: clearing }))
-  const pads: SitePad[] = plan.sites.map((s) => ({ x: s.x, z: s.z, radius: s.radius }))
-  flattenSitePads(hm, frame.cellSize, [...plazas, ...pads])
-
-  return { frame, plan }
 }
 
 // --- one match ---------------------------------------------------------------
@@ -157,7 +104,7 @@ interface MatchReport {
 }
 
 function runMatch(seed: string, args: Args): MatchReport {
-  const { frame, plan } = buildBoard(seed, args.rough)
+  const { frame, plan } = buildBoard(seed, { stage: args.stage })
 
   const sim = new Sim({
     onRespawn: () => {},
@@ -306,8 +253,10 @@ const args = parseArgs(process.argv.slice(2))
 
 console.log(
   `match harness — ${args.seeds.length} seed(s), dt ${args.dt}s, cap ${mmss(args.cap)}` +
-    (args.rough ? ', ROUGH (no amplification — ground differs from the game)' : '') +
-    '\nscenery pads are not flattened headless; nothing measured here depends on them.',
+    `, stage ${args.stage}` +
+    (args.stage === 'refine'
+      ? ' (the island the game plays on)'
+      : ' (NOT the played island — a preview stage, for iterating faster)'),
 )
 
 const matches: MatchReport[] = []

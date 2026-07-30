@@ -8,7 +8,7 @@
     "play": "vite --open",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
     "make-icon": "node tools/makeIcon.mjs",
     "pack-sprites": "node tools/packSprites.mjs",
     "pack-ground": "node tools/packGround.mjs",
@@ -19,7 +19,8 @@
     "match": "rolldown tools/matchHarness.ts -o node_modules/.cache/matchHarness.mjs --platform node --format esm && node node_modules/.cache/matchHarness.mjs",
     "audit-scatter": "rolldown tools/scatterAudit.ts -o node_modules/.cache/scatterAudit.mjs --platform node --format esm && node node_modules/.cache/scatterAudit.mjs",
     "audit-roads": "rolldown tools/roadAudit.ts -o node_modules/.cache/roadAudit.mjs --platform node --format esm && node node_modules/.cache/roadAudit.mjs",
-    "check-nodes": "rolldown tools/nodeCheck.ts -o node_modules/.cache/nodeCheck.mjs --platform node --format esm && node node_modules/.cache/nodeCheck.mjs"
+    "check-nodes": "rolldown tools/nodeCheck.ts -o node_modules/.cache/nodeCheck.mjs --platform node --format esm && node node_modules/.cache/nodeCheck.mjs",
+    "board-diff": "rolldown tools/boardDiff.ts -o node_modules/.cache/boardDiff.mjs --platform node --format esm && node node_modules/.cache/boardDiff.mjs"
   },
   "dependencies": {
     "lil-gui": "^0.21.0",
@@ -27,7 +28,9 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
     "@types/three": "^0.185.1",
+    "rolldown": "^1.2.1",
     "typescript": "^7.0.2",
     "vite": "^8.1.5"
   }

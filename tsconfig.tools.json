@@ -1,0 +1,22 @@
+{
+  // The headless tools, which the root config deliberately leaves out: they run
+  // under Node rather than Vite, so they need `@types/node` and no `vite/client`.
+  //
+  // They were unchecked entirely until `tools/board.ts` was found to be building
+  // a different island from the game — a private duplicate of the board sequence
+  // had been sitting in `matchHarness.ts` drifting, and nothing was ever going to
+  // notice. `npm run typecheck` runs this second pass now.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // `vite/client` alongside `node` only for its `*.png` module declarations:
+    // `game/factions.ts` and `game/sim.ts` take `UnitKey`/`SpriteKey` from
+    // `render/spriteAtlas`, which imports two atlases. The imports are erased —
+    // no tool loads a renderer — but the types still have to resolve.
+    "types": ["node", "vite/client"],
+    "lib": ["ES2022"]
+  },
+  // Only `tools` — the `src` modules they import come in transitively and get
+  // checked with them. Naming `src` here instead would drag in the renderer and
+  // the input handler, which are DOM code and have no business in a Node lib.
+  "include": ["tools"]
+}

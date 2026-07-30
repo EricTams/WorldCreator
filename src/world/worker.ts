@@ -50,6 +50,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       // of magnitude more for detail you cannot see.
       let erodeMs = 0
       if (req.params.erosion.droplets > 0) {
+        // Same stream name `build.ts` uses, so a headless `buildTerrain` and
+        // this worker carve the identical valleys from one seed.
         const rng = makeRng(req.params.seed, 'erosion')
         const result = erode(
           hm,

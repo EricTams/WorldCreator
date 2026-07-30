@@ -36,7 +36,18 @@ function board(resource: ResourceKind, monument: MonumentKind = 'temple'): MapPl
 }
 
 const flat = new Heightmap(8, new Float32Array(64).fill(0.5))
-const frame: TerrainFrame = { heightmap: flat, cellSize: 100, heightScale: 100, seaLevel: 0.1 }
+// No coastal shelf: the board is a featureless plateau well above sea level, so
+// there is no shoreline for a shelf to step. Stated rather than omitted — every
+// other frame in the tree carries these, and leaving them off a real island is
+// what once made an audit see no land at all.
+const frame: TerrainFrame = {
+  heightmap: flat,
+  cellSize: 100,
+  heightScale: 100,
+  seaLevel: 0.1,
+  shelfRise: 0,
+  shelfBand: 0,
+}
 
 /** A sim with faction 0 rich and its capital grown, so orders are never refused for price. */
 function rig(resource: ResourceKind, monument: MonumentKind = 'temple'): Sim {
