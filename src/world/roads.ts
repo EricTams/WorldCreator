@@ -197,6 +197,16 @@ export interface RoadNetwork {
    * regenerate, so its size is worth caring about.
    */
   cells: Uint8Array
+  /**
+   * The surface this cell fades *towards*, same +1 offset, and how far along
+   * that fade it is as 0..255 mapping 0..1.
+   *
+   * Two arrays rather than one packed value because the renderer reads them
+   * into two separate vertex attributes anyway, and because `cells` is the hot
+   * one — the autotiler walks it eight times per cell and has no use for these.
+   */
+  alt: Uint8Array
+  mix: Uint8Array
   /** Cells per side. */
   size: number
   /** World units per cell. */
@@ -282,6 +292,72 @@ function materialForBiome(id: string): RoadMaterial {
 
 /** A town's own streets are paved, whatever the country road into it is made of. */
 const PLAZA_MATERIAL: RoadMaterial = 'brick'
+
+/**
+ * How much wider the road's surface transition is than the ground's colour fade.
+ *
+ * Matching `biome.blend` exactly was the first attempt and it is invisible. The
+ * arithmetic: `blend` is 16 *difference* units, which is about 8 units on the
+ * ground, which is three road cells — and across three cells a probabilistic
+ * dither flips one of them. The road changed surface in a single step with one
+ * stray tile beside it, which reads as a hard edge with a rendering fault next
+ * to it rather than as a transition.
+ *
+ * The ground gets away with a band that narrow because it is fading a *colour*
+ * continuously: eight units is plenty to cross-fade green into tan. A road
+ * cannot fade, because a cell holds one tile index — the only thing it can do
+ * is interleave whole cells, and interleaving needs room to be legible. Four
+ * times the width gives about thirteen cells, which is a stretch of road you
+ * can watch change rather than a boundary you cross.
+ *
+ * So the two are deliberately no longer the same number. They are still tied:
+ * this scales `biome.blend`, so moving the border-blend slider still moves the
+ * road with it.
+ */
+const BLEND_SCALE = 4
+
+/**
+ * The two surfaces a road cell is made of, and how far between them it sits.
+ *
+ * A real cross-fade, not a choice. The renderer samples the same tile out of
+ * both materials' blocks and lerps — the four blocks are pixel-identical in
+ * layout, so a given neighbourhood picks the same tile in each and the two
+ * samples differ only in surface, never in shape. That makes mixing them safe
+ * and makes the alpha mask identical, so the road's outline stays crisp while
+ * its material dissolves.
+ *
+ * An earlier version dithered instead, picking one material or the other per
+ * cell on a hash. It is the traditional answer for indexed tiles and it was
+ * wrong here: across a band a few cells wide it flips one or two tiles, which
+ * reads as a hard edge with stray pixels beside it rather than as a transition.
+ *
+ * `mix` runs 0 at the heart of a territory to 0.5 exactly on the border, where
+ * the two are even. It stops at 0.5 rather than reaching 1 because the pair
+ * swaps as you cross — past the line the far territory becomes `a` and the mix
+ * falls away again — which is what makes the fade symmetric without either side
+ * having to know where the border is.
+ *
+ * The width comes from `gap`, the difference between the distances to the two
+ * nearest capitals, rather than from the sample's own `t`, because that one is
+ * scaled to `biome.blend` and this band is deliberately wider. See
+ * `BLEND_SCALE`.
+ */
+function materialAt(
+  field: BiomeField | null,
+  x: number,
+  z: number,
+): { a: RoadMaterial; b: RoadMaterial; mix: number } {
+  const fallback = materialForBiome('meadow')
+  if (!field) return { a: fallback, b: fallback, mix: 0 }
+  const s = sampleBiomeAt(field, x, z)
+  const band = Math.max(1e-3, field.blend * BLEND_SCALE)
+  const mix = s.gap >= band ? 0 : 0.5 * (1 - s.gap / band)
+  return {
+    a: materialForBiome(BIOMES[s.a].id),
+    b: materialForBiome(BIOMES[s.b].id),
+    mix,
+  }
+}
 
 const MATERIAL_INDEX: Record<string, number> = Object.fromEntries(
   ROAD_MATERIALS.map((m, i) => [m, i]),
@@ -577,7 +653,13 @@ function stampDisc(
     for (let i = i0; i <= i1; i++) {
       const dx = i - ci
       const dz = j - cj
-      if (dx * dx + dz * dz <= r * r) net.cells[j * net.size + i] = v
+      if (dx * dx + dz * dz > r * r) continue
+      const k = j * net.size + i
+      // A plaza is one flat surface with nothing to fade towards, so it points
+      // its blend at itself. Leaving `alt` at 0 would name material -1.
+      net.cells[k] = v
+      net.alt[k] = v
+      net.mix[k] = 0
     }
   }
 }
@@ -711,8 +793,10 @@ function stampSegment(
       // A town's paving is not overwritten by the country road running into
       // it. The plaza is stamped first and is the more specific statement.
       if (net.cells[k] === plaza) continue
-      const biome = field ? BIOMES[sampleBiomeAt(field, x, z).a].id : 'meadow'
-      net.cells[k] = MATERIAL_INDEX[materialForBiome(biome)] + 1
+      const m = materialAt(field, x, z)
+      net.cells[k] = MATERIAL_INDEX[m.a] + 1
+      net.alt[k] = MATERIAL_INDEX[m.b] + 1
+      net.mix[k] = Math.round(m.mix * 255)
     }
   }
 }
@@ -799,6 +883,8 @@ export function buildRoadNetwork(
 
   const net: RoadNetwork = {
     cells: new Uint8Array(drawSize * drawSize),
+    alt: new Uint8Array(drawSize * drawSize),
+    mix: new Uint8Array(drawSize * drawSize),
     size: drawSize,
     cellSize: ROAD_CELL,
     originX: origin,
