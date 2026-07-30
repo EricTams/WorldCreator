@@ -80,6 +80,35 @@ const SLOPE_REFERENCE = 0.22
 const REUSE_COST = 0.15
 
 /**
+ * How deep the water may be for a bridge to cross it, in normalised height
+ * below the waterline.
+ *
+ * This, not the cost below, is what stops roads striding across the sea. Cost
+ * alone cannot: make it high enough to forbid a long ocean crossing and a road
+ * will not step over a stream either, because A* only ever compares a crossing
+ * against the detour around it, and for a site on an islet there is no detour
+ * at any price. A depth limit is a statement about the water itself and does
+ * not depend on what is on the far side.
+ *
+ * 0.05 against a sea level of about 0.32 covers inlets, river mouths and the
+ * bar across a lagoon, and stops well short of open sea. Measured on two seeds:
+ * at 0.05 the longest span is 15 units, at 0.25 it is 22 and starts to read as a
+ * causeway rather than a bridge.
+ */
+const BRIDGE_DEPTH = 0.05
+
+/**
+ * What a cell of bridgeable water costs, against 1 for flat land.
+ *
+ * High enough that a road takes a reasonable dry detour first — six cells of
+ * dry ground, 30 world units, before a single cell of water is worth it — so
+ * bridges appear where crossing is genuinely the sensible line and not merely
+ * possible. Bridges are also expensive to look at: a handful across the map is
+ * a feature, one at every stream is noise.
+ */
+const BRIDGE_COST = 6
+
+/**
  * How many nearest places each place reaches for.
  *
  * Every linkable place reaches, not just the cities — a mine and the node in
@@ -207,6 +236,15 @@ export interface RoadNetwork {
    */
   alt: Uint8Array
   mix: Uint8Array
+  /**
+   * Where the road is a bridge, and which way its deck runs.
+   *
+   * 0 for ordinary road, 1 for a deck running east-west, 2 for north-south.
+   * A bridge is not autotiled — its tile is chosen by the direction of the road
+   * crossing, not by which neighbours are road — so it cannot be expressed in
+   * `cells` and needs a channel of its own.
+   */
+  bridge: Uint8Array
   /** Cells per side. */
   size: number
   /** World units per cell. */
@@ -275,11 +313,19 @@ export interface RoadTerrain {
  */
 function materialForBiome(id: string): RoadMaterial {
   switch (id) {
-    // Beaten earth through farmland and forest.
+    // Beaten earth, on the one territory pale enough to take it. `dirt` is the
+    // lightest surface in the pack and its outline is a warm tan barely a shade
+    // darker than its fill — it has almost no edge of its own, and relies on
+    // the ground around it to supply the contrast. Meadow grass does.
     case 'meadow':
-    case 'wildwood':
       return 'dirt'
-    // Hard country, hard surface.
+    // Hard country, hard surface — and the Wildwood, which floors on the dark
+    // marsh sheet. `dirt` was here first and was wrong: cream on near-black
+    // green is a scar rather than a path, and because the material's own
+    // outline is so faint the road read as a flat slab with no edges at all.
+    // Gravel is a mid brown, so it sits against dark ground instead of
+    // shouting over it, and its outline is dark enough to be seen.
+    case 'wildwood':
     case 'highland':
     case 'blight':
       return 'gravel'
@@ -458,11 +504,13 @@ function bakeCost(terrain: RoadTerrain, size: number): Float32Array {
       const gz = Math.min(cells - 1.001, Math.max(0, j * perCell))
       const g = sampleHeightAndGradient(hm.data, hm.size, gx, gz)
 
-      // Water is not routed across. Bridges exist in the tileset and are not
-      // wired up; until they are, "the road stops at the water" is the honest
-      // result, and the island is connected land so no trunk needs one.
-      if (g.height <= seaLevel + 0.004) {
-        cost[j * size + i] = Infinity
+      // Water is crossable, on a bridge, if it is shallow enough — see
+      // `BRIDGE_DEPTH` and `BRIDGE_COST`. Deep water is not: a bridge across an
+      // ocean is a mistake, and the depth test is what keeps crossings at the
+      // inlets and river mouths where one belongs.
+      const depth = seaLevel - g.height
+      if (depth > -0.004) {
+        cost[j * size + i] = depth > BRIDGE_DEPTH ? Infinity : BRIDGE_COST
         continue
       }
 
@@ -768,8 +816,14 @@ function stampSegment(
   b: { x: number; z: number },
   half: number,
   field: BiomeField | null,
+  overWater: (x: number, z: number) => boolean,
 ): void {
   const plaza = MATERIAL_INDEX[PLAZA_MATERIAL] + 1
+  // Which way the deck runs, decided once for the whole segment rather than per
+  // cell. Per cell it would flip mid-span wherever the crossing is close to
+  // diagonal, and a bridge whose planks change direction halfway is worse than
+  // one that is slightly off the line of travel.
+  const deck = Math.abs(b.x - a.x) >= Math.abs(b.z - a.z) ? 1 : 2
   const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x) - half - net.originX) / net.cellSize))
   const i1 = Math.min(net.size - 1, Math.ceil((Math.max(a.x, b.x) + half - net.originX) / net.cellSize))
   const j0 = Math.max(0, Math.floor((Math.min(a.z, b.z) - half - net.originZ) / net.cellSize))
@@ -797,6 +851,7 @@ function stampSegment(
       net.cells[k] = MATERIAL_INDEX[m.a] + 1
       net.alt[k] = MATERIAL_INDEX[m.b] + 1
       net.mix[k] = Math.round(m.mix * 255)
+      net.bridge[k] = overWater(x, z) ? deck : 0
     }
   }
 }
@@ -829,6 +884,7 @@ function rasterise(
   keep: readonly boolean[],
   routeSize: number,
   field: BiomeField | null,
+  overWater: (x: number, z: number) => boolean,
 ): number[] {
   // One draw cell. On an axis this keeps exactly the two cells either side of
   // the block boundary and rejects their neighbours at 1.5 cells out.
@@ -843,7 +899,7 @@ function rasterise(
     // cut — the segment collapses to a point and stamps a round cap, which is
     // how a road should end anyway.
     const b = n + 1 < path.length && keep[n + 1] ? blockCentre(net, path[n + 1], routeSize) : a
-    stampSegment(net, a, b, half, field)
+    stampSegment(net, a, b, half, field, overWater)
   }
 
   return paved
@@ -885,6 +941,7 @@ export function buildRoadNetwork(
     cells: new Uint8Array(drawSize * drawSize),
     alt: new Uint8Array(drawSize * drawSize),
     mix: new Uint8Array(drawSize * drawSize),
+    bridge: new Uint8Array(drawSize * drawSize),
     size: drawSize,
     cellSize: ROAD_CELL,
     originX: origin,
@@ -913,6 +970,17 @@ export function buildRoadNetwork(
   for (const s of sites) {
     if (s.kind !== 'city') continue
     stampDisc(net, s.x, s.z, plazaRadius, PLAZA_MATERIAL)
+  }
+
+  // Is this point standing in water? Asked per drawn cell, so it samples the
+  // heightfield directly rather than the routing grid — a crossing is five
+  // world units wide and the routing grid is coarser than that, so reading the
+  // route's own cells would put the deck a cell wide of the water it spans.
+  const cells = terrain.hm.size - 1
+  const overWater = (x: number, z: number): boolean => {
+    const gx = Math.min(cells - 1.001, Math.max(0, (x - origin) / terrain.cellSize))
+    const gz = Math.min(cells - 1.001, Math.max(0, (z - origin) / terrain.cellSize))
+    return sampleHeightAndGradient(terrain.hm.data, terrain.hm.size, gx, gz).height <= terrain.seaLevel
   }
 
   const cost = bakeCost(terrain, routeSize)
@@ -948,7 +1016,7 @@ export function buildRoadNetwork(
       continue
     }
     const { keep, score } = cutMask(p, routeSize, origin, stands)
-    const paved = rasterise(net, p, keep, routeSize, field)
+    const paved = rasterise(net, p, keep, routeSize, field, overWater)
     if (paved.length > 0) markBuilt(paved, built)
     routes.push({
       from: { x: linked[a].x, z: linked[a].z },

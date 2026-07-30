@@ -34,10 +34,10 @@ export const ROAD_BLOCK_ORIGIN: readonly (readonly [number, number])[] = [
 
 /** Bridge tiles, in tiles from the sheet's top left. Placed by hand, not autotiled. */
 export const ROAD_BRIDGES: Readonly<Record<string, readonly [number, number]>> = {
-  stoneWide: [12, 10],
-  stoneNarrow: [13, 10],
-  plankWide: [14, 10],
-  plankNarrow: [15, 10],
+  stoneEW: [12, 10],
+  stoneNS: [13, 10],
+  greyEW: [14, 10],
+  greyNS: [15, 10],
 }
 
 /**

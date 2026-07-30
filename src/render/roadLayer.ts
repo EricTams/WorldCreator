@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import roadsUrl from '../assets/roads.png'
 import {
   ROAD_BLOCK_ORIGIN,
+  ROAD_BRIDGES,
   ROAD_SHEET_HEIGHT,
   ROAD_SHEET_WIDTH,
   ROAD_TILE,
@@ -50,6 +51,25 @@ import type { TerrainFrame } from '../world/terrainQuery'
  * survive anyway.
  */
 const LIFT = 0.15
+
+/**
+ * Clearance of a bridge deck above the waterline, in world units.
+ *
+ * A bridge cannot use `LIFT`, because `terrainDrawnHeightAt` over water returns
+ * the *seabed* — the sea is part of the terrain surface here, not a separate
+ * plane laid on top — so a deck lifted from the ground it stands over would be
+ * drawn beneath the water it is supposed to cross.
+ *
+ * Taking the greater of the ground and the waterline gives the right shape for
+ * free: flat across the span at the height of the water, and rising onto the
+ * bank at either end where the ground climbs out from under it.
+ *
+ * Larger than `LIFT` because the sea is drawn as a flat surface with no relief
+ * to clear, so all this has to beat is depth precision — and a deck sitting a
+ * little proud of the water reads as a bridge, where one exactly level with it
+ * reads as a ford.
+ */
+const BRIDGE_LIFT = 0.5
 
 /**
  * Alpha below which a road texel is not drawn at all.
@@ -192,6 +212,8 @@ export class RoadLayer {
      */
     const sub = Math.max(1, Math.ceil(cellSize / Math.max(1e-4, frame.cellSize)))
     const step = cellSize / sub
+    /** World Y of the waterline — what a bridge deck rests on. */
+    const seaY = frame.seaLevel * frame.heightScale
 
     // Count first, then fill. Two passes over the grid is far cheaper than
     // growing three JS arrays across a few thousand quads and converting at the
@@ -244,21 +266,49 @@ export class RoadLayer {
           (road(i - 1, j) ? 64 : 0) |
           (road(i - 1, j - 1) ? 128 : 0)
 
-        // One tile, located in two materials' blocks. The mask decides the tile
-        // and the material decides only which block to take it from, so the two
-        // rects are the same shape at different offsets and can be crossfaded.
-        const [lx, ly] = ROAD_TILE_FOR_MASK[mask]
-        const [bx, by] = ROAD_BLOCK_ORIGIN[cell - 1]
-        const altCell = net.alt[j * size + i] || cell
-        const [ax, ay] = ROAD_BLOCK_ORIGIN[altCell - 1]
-        const blend = net.mix[j * size + i] / 255
+        // Where the road stands in water it is a bridge, and a bridge is not
+        // autotiled: its tile is chosen by the direction the deck runs, not by
+        // which neighbours happen to be road. It also has nothing to fade
+        // towards — a crossing is one built structure end to end — so both uv
+        // sets point at the same tile and the blend is forced off.
+        const deck = net.bridge[j * size + i]
+        let tx: number
+        let ty: number
+        let ax: number
+        let ay: number
+        let blend: number
 
-        const u0 = (bx + lx) * du + insetU
-        const v0 = (by + ly) * dv + insetV
+        if (deck !== 0) {
+          // Stone for the earthen surfaces, grey for the built ones, so the
+          // crossing looks like it belongs to the road that arrives at it.
+          const stone = cell <= 2
+          const key = deck === 1 ? (stone ? 'stoneEW' : 'greyEW') : stone ? 'stoneNS' : 'greyNS'
+          ;[tx, ty] = ROAD_BRIDGES[key]
+          ax = tx
+          ay = ty
+          blend = 0
+        } else {
+          // One tile, located in two materials' blocks. The mask decides the
+          // tile and the material decides only which block to take it from, so
+          // the two rects are the same shape at different offsets and can be
+          // crossfaded.
+          const [lx, ly] = ROAD_TILE_FOR_MASK[mask]
+          const [bx, by] = ROAD_BLOCK_ORIGIN[cell - 1]
+          const altCell = net.alt[j * size + i] || cell
+          const [cx2, cy2] = ROAD_BLOCK_ORIGIN[altCell - 1]
+          tx = bx + lx
+          ty = by + ly
+          ax = cx2 + lx
+          ay = cy2 + ly
+          blend = net.mix[j * size + i] / 255
+        }
+
+        const u0 = tx * du + insetU
+        const v0 = ty * dv + insetV
         const u1 = u0 + du - insetU * 2
         const v1 = v0 + dv - insetV * 2
-        const a0 = (ax + lx) * du + insetU
-        const b0 = (ay + ly) * dv + insetV
+        const a0 = ax * du + insetU
+        const b0 = ay * dv + insetV
         const a1 = a0 + du - insetU * 2
         const b1 = b0 + dv - insetV * 2
 
@@ -299,8 +349,10 @@ export class RoadLayer {
             ]
 
             for (const [x, z, u, w, au, aw] of corners) {
+              const ground = terrainDrawnHeightAt(frame, x, z)
               positions[v * 3] = x
-              positions[v * 3 + 1] = terrainDrawnHeightAt(frame, x, z) + LIFT
+              positions[v * 3 + 1] =
+                deck !== 0 ? Math.max(ground, seaY) + BRIDGE_LIFT : ground + LIFT
               positions[v * 3 + 2] = z
               uvs[v * 2] = u
               uvs[v * 2 + 1] = w

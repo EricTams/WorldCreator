@@ -332,7 +332,7 @@ export function defaultParams(): WorldParams {
     },
     fog: {
       enabled: true,
-      revealAll: false,
+      revealAll: true,
       // 180 m of sight on a 2 km island: a straight crossing sweeps a 360 m
       // corridor, so learning the whole map is several deliberate journeys
       // rather than one lap. It is also far wider than the follow camera's

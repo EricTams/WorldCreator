@@ -64,12 +64,23 @@ const MATERIALS = [
   { id: 'brick', tx: 8, ty: 5, rgb: [243, 221, 172] },
 ]
 
-/** The four bridge tiles, bottom row. Not autotiled — placed by hand at a crossing. */
+/**
+ * The four bridge tiles, bottom row: two materials, each in two orientations.
+ *
+ * Not autotiled — a bridge is placed where a road meets water, and which of
+ * these to use is decided by the road's direction, not by its neighbourhood.
+ *
+ * The orientations were measured rather than guessed, because "wide" and
+ * "narrow" was the first reading of them and it was wrong. Counting opaque
+ * pixels along each edge: 12,10 and 14,10 are solid down their left and right
+ * edges and empty top and bottom, so their deck runs east-west; 13,10 and 15,10
+ * are the reverse. A bridge tile connects on the two edges its deck reaches.
+ */
 const BRIDGES = [
-  { id: 'stoneWide', tx: 12, ty: 10 },
-  { id: 'stoneNarrow', tx: 13, ty: 10 },
-  { id: 'plankWide', tx: 14, ty: 10 },
-  { id: 'plankNarrow', tx: 15, ty: 10 },
+  { id: 'stoneEW', tx: 12, ty: 10 },
+  { id: 'stoneNS', tx: 13, ty: 10 },
+  { id: 'greyEW', tx: 14, ty: 10 },
+  { id: 'greyNS', tx: 15, ty: 10 },
 ]
 
 if (!existsSync(SRC)) {

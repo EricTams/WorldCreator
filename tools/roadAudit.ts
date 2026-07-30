@@ -107,6 +107,43 @@ for (const seed of seeds) {
     '  surface  ' +
       ROAD_MATERIALS.map((m, i) => `${m} ${byMaterial[i]}`).join('  '),
   )
+
+  // Bridges, as spans rather than cells: a crossing is one thing to look at,
+  // however many tiles it takes. Counted by flood-filling the deck mask, and
+  // reported with the longest, because one enormous span is the failure mode
+  // the depth limit exists to prevent.
+  const seen = new Uint8Array(net.bridge.length)
+  const spans: number[] = []
+  for (let k = 0; k < net.bridge.length; k++) {
+    if (!net.bridge[k] || seen[k]) continue
+    let n = 0
+    const stack = [k]
+    seen[k] = 1
+    while (stack.length) {
+      const c = stack.pop() as number
+      n++
+      const ci = c % net.size
+      const cj = (c / net.size) | 0
+      for (const [di, dj] of [[1,0],[-1,0],[0,1],[0,-1]] as const) {
+        const ni = ci + di
+        const nj = cj + dj
+        if (ni < 0 || nj < 0 || ni >= net.size || nj >= net.size) continue
+        const nk = nj * net.size + ni
+        if (!net.bridge[nk] || seen[nk]) continue
+        seen[nk] = 1
+        stack.push(nk)
+      }
+    }
+    spans.push(n)
+  }
+  spans.sort((a, b) => b - a)
+  const deckCells = spans.reduce((a, b) => a + b, 0)
+  console.log(
+    `  bridges  ${spans.length} spans, ${deckCells} deck cells` +
+      (spans.length
+        ? `, longest ${(Math.sqrt(spans[0]) * ROAD_CELL).toFixed(0)}u across`
+        : ''),
+  )
   console.log(
     '  by territory  ' +
       BIOMES.map((b, i) => `${b.id} ${perBiome[i].toFixed(0)}u`).join('  '),
